@@ -315,7 +315,7 @@ def test_render_qc_report_writes_file(df, tmp_path):
 def test_render_qc_report_excludes_linkage_keys(df, tmp_path):
     """Privacy constraint (Descriptive Study Plan Sec 11 / Implementation Plan
     Sec 7): the rendered report must never carry row-level Source_id/Nomer/
-    IndexCase values -- only aggregate rule and column names."""
+    IndexCase *values* -- only aggregate rule and column names."""
     result = qc.run_qc(df)
     audit = qc.missingness_audit(df)
     out_path = tmp_path / "qc_report.md"
@@ -323,6 +323,12 @@ def test_render_qc_report_excludes_linkage_keys(df, tmp_path):
 
     text = out_path.read_text(encoding="utf-8")
     consistency_section = text.split("## Missingness audit")[0]
-    # No individual Nomer/IndexCase values (e.g. the flagged "4" or
-    # "IDX0001") should appear as row-level identifiers in the rules
-    # section. "IndexCase"/"RelationWithSource" may legiti
+    # "Source_id"/"Nomer"/"IndexCase" legitimately appear as *column
+    # names* in the missingness table below (aggregate null-rate stats
+    # only, e.g. "Source_id | 18 | 0 | 0.0% | ..."). But the rules
+    # section above -- where a row-level flagged record could leak --
+    # must never mention these keys, and no actual IndexCase value
+    # (e.g. "IDX0001") should appear anywhere in the report.
+    assert "IDX00" not in text
+    assert "Source_id" not in consistency_section
+    assert "Nomer" not in consistency_section
