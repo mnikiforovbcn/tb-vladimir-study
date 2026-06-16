@@ -1,0 +1,52 @@
+[project]
+name = "tb-cascade"
+version = "0.1.0"
+description = "Analytical framework for the Vladimir Oblast TB preventive treatment cascade descriptive study"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "pyarrow>=16.0",
+    "duckdb>=1.0",
+    "pandera>=0.20",
+    "statsmodels>=0.14",
+    "scipy>=1.13",
+    "lifelines>=0.29",
+    "tableone>=0.9",
+    "plotly>=5.22",
+    "kaleido>=0.2.1",
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+    "black>=24.4",
+    "pre-commit>=3.7",
+    "ydata-profiling>=4.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tb_cascade"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
