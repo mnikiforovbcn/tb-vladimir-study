@@ -83,10 +83,11 @@ TBPoject/
 ## 4. Build plan — ordered tasks
 
 ### Phase 0 — Project scaffolding
-1. `git init` (if not already a repo); add `.gitignore` for `Data/processed/`, `reports/`, virtual env, and notebook checkpoints.
-2. `uv init` / create `pyproject.toml`; pin Python 3.11+; add dependencies from §2.
-3. Add `pre-commit` config running `ruff` and `black` on commit.
-4. Create the folder skeleton from §3 with empty `__init__.py` files.
+1. `git init`  and first commit already done. Repository name:  https://github.com/mnikiforovbcn/tb-vladimir-study.git
+2. add `.gitignore` for `Data/processed/`, `reports/`, virtual env, and notebook checkpoints.
+3. `uv init` / create `pyproject.toml`; pin Python 3.11+; add dependencies from §2.
+4. Add `pre-commit` config running `ruff` and `black` on commit.
+5. Create the folder skeleton from §3 with empty `__init__.py` files.
 
 ### Phase 1 — Ingestion (`io.py`)
 1. Write `load_raw(path) -> pd.DataFrame` that reads the CSV with an explicit `dtype`/`parse_dates` map built directly from `Documentation/DataSet Description (English).md` (every `0/1` flag as nullable `Int64` or `boolean`, every `date` field as `datetime64[ns]`, `Source` as `category`).
