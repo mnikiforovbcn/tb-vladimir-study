@@ -2,7 +2,7 @@ This folder contains data about the project of preventive treatment of tuberculo
 
 ## Folder contents
 
-- `Data/VladKovMur_dataset.csv` — the main dataset: 7,732 patient records across 62 fields, combining three regional sources within Vladimir Oblast: Vladimir (6,318 records), Kovrov (1,034), and Murom (380). Records span screenings dated from June 2018 to June 2026.
+- `Data/raw/VladKovMur_dataset.csv` — the main dataset: 7,732 patient records across 62 fields, combining three regional sources within Vladimir Oblast: Vladimir (6,318 records), Kovrov (1,034), and Murom (380). Records span screenings dated from June 2018 to June 2026.
 - `Documentation/DataSet Description.docx` — a Russian-language data dictionary defining every field in the CSV (name, description, allowed values, and data type).
 - `Documentation/DataSet Description (English).md` — English translation of the data dictionary above, with corrections (the `Pol`/`Sex` field rename, a fixed description for `SchemaDoses`) and an added entry for `DiaskintestPositive`, which was undocumented in the original.
 - `Descriptive Study Plan.md` — a descriptive epidemiological study plan for the dataset: objectives, study design, variable mapping, data quality checks, a step-by-step cascade-of-care analysis (screening → diagnosis → LTI preventive treatment → adherence → outcomes), site/temporal comparisons, and limitations.
@@ -23,4 +23,4 @@ Key groups of fields:
 - **Treatment outcomes**: completion status (`TreatmentCompleted` = 100% of doses, `TreatmentFinished` = 85–100%), `TBdeveloped`, treatment stopped/not finished/continuing/unknown outcome flags, doses taken vs. scheduled (`DosesTaken`, `SchemaDoses`, `Take50pc`, `Take100pc`), and `FinalOutcome` (TB did not develop / TB developed / unknown / other).
 - **Incentive payments**: dates and receipt flags for support/incentive payments tied to screening, 50%, and 100% treatment completion milestones, and 1-year follow-up (`Supp*` / `DateSupp*` fields), differentiated by treatment group.
 
-Patients are roughly evenly split by sex (3,940 female vs. 3,792 male using the `Sex` coding 1=male, 2=female per the data dictionary — cou
+Patients are roughly evenly split by sex (3,940 female vs. 3,792 male using the `Sex` coding 1=male, 2=female per the data dictionary — counts here use raw codes). Most individuals (6,004) fall in the "contact" target group, versus 1,042 homeless and 686 PLHIV. The majority (6,382) are in the observation-only treatment group, 1,219 received LTI treatment, and 101 received full TB treatment. Of the 3,499 records with a recorded final outcome, the large majority (3,302) show no TB developed.

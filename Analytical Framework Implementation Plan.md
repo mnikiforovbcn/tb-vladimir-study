@@ -4,7 +4,7 @@
 
 ## 1. Purpose and scope
 
-`Descriptive Study Plan.md` specifies *what* needs to be measured (a 10-step screening-to-outcome cascade, baseline characteristics, site/temporal comparisons) and the QC rules the data must satisfy. This document specifies *how* to build that as software: the technology stack, repository layout, and an ordered set of engineering tasks that take `Data/VladKovMur_dataset.csv` from raw CSV to a reproducible set of tables, charts, and a rendered report.
+`Descriptive Study Plan.md` specifies *what* needs to be measured (a 10-step screening-to-outcome cascade, baseline characteristics, site/temporal comparisons) and the QC rules the data must satisfy. This document specifies *how* to build that as software: the technology stack, repository layout, and an ordered set of engineering tasks that take `Data/raw/VladKovMur_dataset.csv` from raw CSV to a reproducible set of tables, charts, and a rendered report.
 
 Design goals, in priority order:
 
@@ -173,4 +173,6 @@ TBPoject/
 | 4 — Cascade analytics | 2 days |
 | 5 — Visualization | 1.5 days |
 | 6 — Report assembly | 1.5 days |
-| 7 
+| 7 — Automation/CLI | 0.5 day |
+| 8 — Validation/sign-off | 1 day (depends on epidemiologist availability) |
+| **Total** | **~10.5 working days** for one engineer, before iteration on review feedback |

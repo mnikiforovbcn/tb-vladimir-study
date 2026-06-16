@@ -27,7 +27,7 @@ Retrospective, descriptive, cross-sectional/cohort analysis of existing programm
 
 ## 4. Data source and study population
 
-- **Source:** `Data/VladKovMur_dataset.csv`, deduplicated by `Source` + `Nomer` (site + registration number).
+- **Source:** `Data/raw/VladKovMur_dataset.csv`, deduplicated by `Source` + `Nomer` (site + registration number).
 - **Inclusion:** All individuals with a record in the dataset, regardless of target group or outcome status.
 - **Population strata of interest:** `TargetGroup` (1 = contact, 2 = homeless, 3 = PLHIV, 4 = other) and `TreatGroup` (1 = TB treatment, 2 = LTI treatment, 3 = observation only).
 - **Linkage:** `IndexCase` allows grouping contacts under the same source TB case for household-cluster descriptive analysis (e.g., number of contacts screened per index case).
