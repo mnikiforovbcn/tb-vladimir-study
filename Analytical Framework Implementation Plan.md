@@ -82,10 +82,10 @@ TBPoject/
 
 ## 4. Build plan — ordered tasks
 
-### Phase 0 — Project scaffolding
+### Phase 0 — Project scaffolding (complete)
 1. `git init`  and first commit already done. Repository name:  https://github.com/mnikiforovbcn/tb-vladimir-study.git
 2. add `.gitignore` for `Data/processed/`, `reports/`, virtual env, and notebook checkpoints.
-3. `uv init` / create `pyproject.toml`; pin Python 3.11+; add dependencies from §2.
+3. `uv init` / create `pyproject.toml`; pin Python 3.11+; add dependencies from §2. — Done: `uv lock` and `uv sync` run successfully (Python 3.13 resolved by `uv`, `uv.lock` committed); environment verified with a smoke import of `pandas`, `duckdb`, `pandera`, `lifelines`.
 4. Add `pre-commit` config running `ruff` and `black` on commit.
 5. Create the folder skeleton from §3 with empty `__init__.py` files.
 
@@ -173,6 +173,4 @@ TBPoject/
 | 4 — Cascade analytics | 2 days |
 | 5 — Visualization | 1.5 days |
 | 6 — Report assembly | 1.5 days |
-| 7 — Automation/CLI | 0.5 day |
-| 8 — Validation/sign-off | 1 day (depends on epidemiologist availability) |
-| **Total** | **~10.5 working days** for one engineer, before iteration on review feedback |
+| 7 

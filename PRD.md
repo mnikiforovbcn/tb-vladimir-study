@@ -7,6 +7,7 @@ This folder contains data about the project of preventive treatment of tuberculo
 - `Documentation/DataSet Description (English).md` — English translation of the data dictionary above, with corrections (the `Pol`/`Sex` field rename, a fixed description for `SchemaDoses`) and an added entry for `DiaskintestPositive`, which was undocumented in the original.
 - `Descriptive Study Plan.md` — a descriptive epidemiological study plan for the dataset: objectives, study design, variable mapping, data quality checks, a step-by-step cascade-of-care analysis (screening → diagnosis → LTI preventive treatment → adherence → outcomes), site/temporal comparisons, and limitations.
 - `Analytical Framework Implementation Plan.md` — a software/data engineering plan for building the analysis pipeline that implements the study plan above: technology stack, repository structure, and an 8-phase build sequence (ingestion, schema/QC, derived variables, cascade analytics, visualization, report assembly, automation, validation).
+- `src/tb_cascade/`, `tests/`, `notebooks/`, `report/`, `reports/`, `Data/processed/`, `pyproject.toml`, `uv.lock`, `.pre-commit-config.yaml`, `.gitignore`, `README.md` — Phase 0 scaffolding for the analysis pipeline (package skeleton, locked/verified `uv` dependency environment, lint/format hooks); pipeline modules themselves are not yet implemented.
 - `.obsidian/` — configuration folder for the Obsidian note-taking app (not project data).
 
 ## Dataset description
@@ -22,4 +23,4 @@ Key groups of fields:
 - **Treatment outcomes**: completion status (`TreatmentCompleted` = 100% of doses, `TreatmentFinished` = 85–100%), `TBdeveloped`, treatment stopped/not finished/continuing/unknown outcome flags, doses taken vs. scheduled (`DosesTaken`, `SchemaDoses`, `Take50pc`, `Take100pc`), and `FinalOutcome` (TB did not develop / TB developed / unknown / other).
 - **Incentive payments**: dates and receipt flags for support/incentive payments tied to screening, 50%, and 100% treatment completion milestones, and 1-year follow-up (`Supp*` / `DateSupp*` fields), differentiated by treatment group.
 
-Patients are roughly evenly split by sex (3,940 female vs. 3,792 male using the `Sex` coding 1=male, 2=female per the data dictionary — counts here use raw codes). Most individuals (6,004) fall in the "contact" target group, versus 1,042 homeless and 686 PLHIV. The majority (6,382) are in the observation-only treatment group, 1,219 received LTI treatment, and 101 received full TB treatment. Of the 3,499 records with a recorded final outcome, the large majority (3,302) show no TB developed.
+Patients are roughly evenly split by sex (3,940 female vs. 3,792 male using the `Sex` coding 1=male, 2=female per the data dictionary — cou
