@@ -15,8 +15,6 @@ dependencies = [
     "tableone>=0.9",
     "plotly>=5.22",
     "kaleido>=0.2.1",
-    "matplotlib>=3.9",
-    "seaborn>=0.13",
     "click>=8.1",
 ]
 
