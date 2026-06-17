@@ -314,3 +314,156 @@ def funnel_chart_by_group(cascade_df: pd.DataFrame, group_col: str = "TargetGrou
         showlegend=False,
     )
     return _add_suppression_caption(fig, cascade_df)
+
+
+# --- Item 5: Step 6 outcome composition stacked bar ---------------------------
+
+#: Human-readable label per `outcome_branch` code (the seven mutually
+#: exclusive flags `derive.cascade_flags`' `_single_label` collapses into
+#: one column -- see `Documentation/DataSet Description (English).md`
+#: for the source columns' exact definitions), in the fixed order this
+#: function always stacks/colors/orders-the-legend by, regardless of
+#: input row order. Ordered roughly favorable-to-unfavorable so a reader
+#: scans every bar's stack from "treatment went well" at the bottom to
+#: "we don't know" at the top.
+_OUTCOME_BRANCH_LABELS: dict[str, str] = {
+    "completed": "Completed (100% of doses)",
+    "finished": "Finished (85-99% of doses)",
+    "continuing": "Continuing",
+    "not_finished": "Not finished",
+    "stopped_med": "Stopped (medical reasons)",
+    "tb_developed": "TB developed",
+    "unknown": "Outcome unknown",
+}
+
+#: One fixed color per outcome_branch label, reused across every group's
+#: bar so e.g. "Completed" is always the same color regardless of which
+#: site/TargetGroup it's stacked under -- same rationale as `_SITE_COLORS`.
+_OUTCOME_BRANCH_COLORS: dict[str, str] = {
+    "completed": "#2ca02c",  # green
+    "finished": "#98df8a",  # light green
+    "continuing": "#1f77b4",  # blue -- still in progress, not a final outcome
+    "not_finished": "#ff7f0e",  # orange
+    "stopped_med": "#d62728",  # red
+    "tb_developed": "#7f0000",  # dark red
+    "unknown": "#999999",  # gray
+}
+
+#: Columns `cascade._categorical_distribution` always produces, beyond
+#: whatever `group_by` dims were requested -- used to validate
+#: `outcome_df`'s shape and to tell group-dimension columns apart from
+#: value columns without needing a second hard-coded column list.
+_OUTCOME_DISTRIBUTION_BASE_COLS: frozenset[str] = frozenset(
+    {"category", "count", "n", "pct", "ci_low", "ci_high", "suppressed"}
+)
+
+
+def _validate_outcome_distribution(outcome_df: pd.DataFrame, *, group_by: list[str] | None) -> None:
+    """Guard for `outcome_stacked_bar`: the input must have exactly
+    `_OUTCOME_DISTRIBUTION_BASE_COLS` plus the requested `group_by` dims
+    as columns, and every `category` value must be a known
+    `_OUTCOME_BRANCH_LABELS` code -- catches a caller passing the wrong
+    step's `_categorical_distribution` output (e.g. Step 3's
+    `diagnosis_branch` or Step 8's `final_outcome_category`) or the wrong
+    `group_by` before it silently produces a malformed or mislabeled
+    chart.
+    """
+    expected_cols = _OUTCOME_DISTRIBUTION_BASE_COLS | set(group_by or [])
+    actual_cols = set(outcome_df.columns)
+    if actual_cols != expected_cols:
+        raise ValueError(
+            f"outcome_stacked_bar: expected columns {sorted(expected_cols)}, "
+            f"got {sorted(actual_cols)} -- is this cascade.step6_adherence_"
+            f"completion(df, group_by={group_by!r})['outcome_distribution']?"
+        )
+    unknown_categories = set(outcome_df["category"].dropna()) - set(_OUTCOME_BRANCH_LABELS)
+    if unknown_categories:
+        raise ValueError(
+            f"outcome_stacked_bar: unrecognized outcome_branch value(s) "
+            f"{sorted(unknown_categories)} -- is 'category' really "
+            "outcome_branch (not e.g. diagnosis_branch or "
+            "final_outcome_category)?"
+        )
+
+
+def outcome_stacked_bar(outcome_df: pd.DataFrame, group_by: list[str] | None = None) -> go.Figure:
+    """Step 6 outcome composition, one stacked bar per observed `group_by`
+    combination (Implementation Plan Phase 5 item 5).
+
+    Takes `cascade.step6_adherence_completion(df, group_by=group_by)
+    ["outcome_distribution"]`'s long-format output directly (`category`
+    -- the `outcome_branch` code -- plus `count`, `n`, `pct`, `ci_low`,
+    `ci_high`, `suppressed`, and one column per requested `group_by`
+    dim). Like every other chart function here, this never calls
+    `cascade.py` itself; `group_by` is only needed to tell this
+    function which of `outcome_df`'s columns are group dimensions vs.
+    value columns, and must match whatever `group_by` the caller passed
+    to `step6_adherence_completion`.
+
+    `group_by` accepts any `cascade._ALLOWED_GROUP_DIMS` combination --
+    `["Source"]`, `["TargetGroup"]`, or both -- satisfying Descriptive
+    Study Plan Sec 9's "by site and target group" and "small multiples
+    comparing the three sites" bullets without a separate small-
+    multiples function: one dim renders one bar per group value; two
+    dims render Plotly's native two-level grouped-category x-axis;
+    `None` (matching `step6_adherence_completion`'s own default) renders
+    a single "Overall" bar for the whole cohort. Three or more dims fall
+    back to one concatenated `"v1 | v2 | ..."` label per combination,
+    since Plotly's grouped-category axis only supports two levels.
+
+    Plotted by `pct` (share of that group's started-treatment cohort),
+    not raw `count`, so bars are comparable across groups of different
+    size. Stack order, legend order, and color are fixed by
+    `_OUTCOME_BRANCH_LABELS`/`_OUTCOME_BRANCH_COLORS` regardless of input
+    row order. A `category` missing for a given group -- per
+    `_categorical_distribution`'s "zero records -> no row" contract --
+    is simply not stacked for that group, rather than drawn as a
+    zero-height segment. Any `suppressed=True` cell is dropped from the
+    plotted geometry (its value columns are already `pd.NA`), with a
+    caption noting how many cells were suppressed.
+    """
+    _validate_outcome_distribution(outcome_df, group_by=group_by)
+    plotted = _drop_suppressed(outcome_df)
+
+    dims = list(group_by) if group_by else []
+
+    fig = go.Figure()
+    for code, label in _OUTCOME_BRANCH_LABELS.items():
+        rows = plotted.loc[plotted["category"] == code]
+        if rows.empty:
+            continue
+        if len(dims) == 0:
+            x_vals = ["Overall"] * len(rows)
+        elif len(dims) == 1:
+            x_vals = rows[dims[0]].tolist()
+        elif len(dims) == 2:
+            x_vals = [rows[d].tolist() for d in dims]
+        else:
+            x_vals = rows[dims].astype(str).agg(" | ".join, axis=1).tolist()
+        customdata = rows[["n", "count", "ci_low", "ci_high"]].astype(float)
+        fig.add_trace(
+            go.Bar(
+                x=x_vals,
+                y=rows["pct"],
+                name=label,
+                marker_color=_OUTCOME_BRANCH_COLORS[code],
+                customdata=customdata,
+                # Same d3-format "%" type as `_step2_funnel_trace` -- `pct`
+                # is a 0-1 fraction, not 0-100.
+                texttemplate="%{y:.1%}",
+                hovertemplate=(
+                    f"{label}<br>"
+                    "%{customdata[1]:.0f} of %{customdata[0]:.0f} (%{y:.1%})<br>"
+                    "95% CI %{customdata[2]:.1%}-%{customdata[3]:.1%}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title="Treatment outcome composition" + (f" by {', '.join(dims)}" if dims else ""),
+        barmode="stack",
+        yaxis_tickformat=".0%",
+        legend_title="Outcome",
+    )
+    return _add_suppression_caption(fig, outcome_df)
