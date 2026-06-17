@@ -89,12 +89,12 @@ TBPoject/
 4. Add `pre-commit` config running `ruff` and `black` on commit.
 5. Create the folder skeleton from §3 with empty `__init__.py` files.
 
-### Phase 1 — Ingestion (`io.py`)
+### Phase 1 — Ingestion (`io.py`) (complete)
 1. Write `load_raw(path) -> pd.DataFrame` that reads the CSV with an explicit `dtype`/`parse_dates` map built directly from `Documentation/DataSet Description (English).md` (every `0/1` flag as nullable `Int64` or `boolean`, every `date` field as `datetime64[ns]`, `Source` as `category`).
 2. Write `snapshot(df, run_date) -> Path` that writes `Data/processed/raw_snapshot_<run_date>.parquet` — an immutable, fast-loading copy of the exact input used for a given run, so every report can cite the dataset version it was built from.
 3. Unit test: load the real CSV, assert row count = 7,732 and column count = 62 (regression guard if the source export format changes).
 
-### Phase 2 — Schema and QC (`schema.py`, `qc.py`)
+### Phase 2 — Schema and QC (`schema.py`, `qc.py`) (complete)
 1. Encode the full data dictionary as a `pandera.DataFrameSchema`: value sets for `TargetGroup` (1–4), `RelationWithSource` (45/313/314/348/366), `FinalOutcome` (1–4), boolean ranges for all `0/1` flags, non-negative integer ranges for `DosesTaken`/`SchemaDoses`.
 2. Implement each rule from Descriptive Study Plan §6 as a standalone, testable function returning a boolean Series of violations, e.g. `check_treatgroup_onehot(df)`, `check_outcome_mutual_exclusivity(df)`, `check_date_order(df)`, `check_doses_taken_le_schema(df)`, `check_diagnosis_mutual_exclusivity(df)`, `check_duplicate_registration(df)`.
 3. Aggregate all checks into `run_qc(df) -> QCResult` (pass/fail counts per rule + a DataFrame of flagged record IDs `Source`+`Nomer`).
