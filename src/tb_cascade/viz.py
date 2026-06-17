@@ -467,3 +467,148 @@ def outcome_stacked_bar(outcome_df: pd.DataFrame, group_by: list[str] | None = N
         legend_title="Outcome",
     )
     return _add_suppression_caption(fig, outcome_df)
+
+
+# --- Item 6: Step 9 quarterly trend lines -------------------------------------
+
+#: Human-readable label per `trends._STEP9_METRICS` key, in the fixed
+#: legend/color order this function always uses regardless of input row
+#: order.
+_STEP9_METRIC_LABELS: dict[str, str] = {
+    "enrollment": "Enrollment",
+    "treatment_initiation": "Treatment initiation",
+    "outcome": "Outcome",
+}
+
+#: One fixed color per metric, reused regardless of which metrics happen
+#: to have data in a given `trend_df` -- same rationale as `_SITE_COLORS`.
+_STEP9_METRIC_COLORS: dict[str, str] = {
+    "enrollment": "#1f77b4",  # blue
+    "treatment_initiation": "#ff7f0e",  # orange
+    "outcome": "#2ca02c",  # green
+}
+
+
+def _validate_trend_df(trend_df: pd.DataFrame) -> None:
+    """Guard for `trend_lines`: the input must have exactly `metric`,
+    `year`, `quarter`, `n`, `suppressed` as columns (no `group_by` dims --
+    `trend_lines` only supports the whole-cohort trend table, see its
+    docstring), and every `metric` value must be a known
+    `_STEP9_METRIC_LABELS` key.
+    """
+    expected_cols = {"metric", "year", "quarter", "n", "suppressed"}
+    actual_cols = set(trend_df.columns)
+    if actual_cols != expected_cols:
+        raise ValueError(
+            f"trend_lines: expected columns {sorted(expected_cols)}, got "
+            f"{sorted(actual_cols)} -- is this trends.step9_quarterly_trends(df)? "
+            "(trend_lines does not support a group_by'd trend table.)"
+        )
+    unknown_metrics = set(trend_df["metric"].dropna()) - set(_STEP9_METRIC_LABELS)
+    if unknown_metrics:
+        raise ValueError(
+            f"trend_lines: unrecognized metric value(s) {sorted(unknown_metrics)} "
+            f"-- expected a subset of {sorted(_STEP9_METRIC_LABELS)}."
+        )
+
+
+def _full_quarter_range(trend_df: pd.DataFrame) -> pd.DataFrame:
+    """Every (`year`, `quarter`) pair from the earliest to the latest
+    observed *anywhere* in `trend_df` (across all metrics combined), with
+    no gaps -- so every metric's line is reindexed against the same
+    shared, continuous quarter axis rather than each metric getting its
+    own independent range. Returns a two-column DataFrame (`year`,
+    `quarter`) in chronological order; empty if `trend_df` has no rows.
+    """
+    if trend_df.empty:
+        return pd.DataFrame({"year": [], "quarter": []})
+    pairs = sorted(set(zip(trend_df["year"].astype(int), trend_df["quarter"].astype(int))))
+    (y0, q0), (y1, q1) = pairs[0], pairs[-1]
+    out = []
+    y, q = y0, q0
+    while (y, q) <= (y1, q1):
+        out.append((y, q))
+        q += 1
+        if q == 5:
+            q, y = 1, y + 1
+    return pd.DataFrame(out, columns=["year", "quarter"])
+
+
+def _quarter_start(year: int, quarter: int) -> pd.Timestamp:
+    """The calendar date a given (`year`, `quarter`) begins on, used as
+    the line chart's x value so Plotly gets a real, evenly-spaced date
+    axis instead of a string it would otherwise sort alphabetically.
+    """
+    return pd.Timestamp(year=int(year), month=(int(quarter) - 1) * 3 + 1, day=1)
+
+
+def trend_lines(trend_df: pd.DataFrame) -> go.Figure:
+    """Step 9 quarterly trend lines, one line per metric (Implementation
+    Plan Phase 5 item 6).
+
+    Takes `trends.step9_quarterly_trends(df)`'s long-format output
+    directly (`metric`, `year`, `quarter`, `n`, `suppressed`) -- the
+    whole-cohort table only; this function has no `group_by` parameter
+    (the Phase 5 plan only specifies "one line per metric" here, not a
+    faceted/grouped version, unlike `outcome_stacked_bar`).
+
+    Per `trends.py`'s own docstring, a quarter with zero events for a
+    given metric simply does not appear as a row. This function
+    reindexes each metric against the full (`year`, `quarter`) range
+    observed anywhere in `trend_df` and fills a genuinely missing
+    quarter with `n=0`, so a real lull shows as a real zero on the line
+    rather than being silently skipped. This is different from a
+    *suppressed* quarter -- a row that did exist, with `n` already
+    blanked to `pd.NA` and `suppressed=True` -- which is never
+    zero-filled: like every other chart in this module, suppressed rows
+    are dropped from the plotted geometry (via `_drop_suppressed`)
+    rather than shown as a fabricated zero, with a caption noting how
+    many cells were suppressed (counted against the original
+    `trend_df`, not the zero-filled/reindexed series). A metric that
+    never occurs anywhere in `trend_df` (e.g. no `DateOutcome` recorded
+    yet) still gets a line -- flat at zero across the whole range --
+    rather than being silently omitted; a metric whose every quarter is
+    suppressed with none left to zero-fill is the one case that
+    produces no line at all.
+    """
+    _validate_trend_df(trend_df)
+    full_range = _full_quarter_range(trend_df)
+
+    fig = go.Figure()
+    for metric, label in _STEP9_METRIC_LABELS.items():
+        sub = trend_df.loc[trend_df["metric"] == metric, ["year", "quarter", "n", "suppressed"]]
+        merged = full_range.merge(sub, on=["year", "quarter"], how="left")
+        # A quarter absent from `sub` entirely (`suppressed` is NA after
+        # the left join, since no row existed to match) is a genuine
+        # zero-event quarter per `trends.py`'s "no row = zero" contract --
+        # distinct from a quarter whose row existed but was suppressed
+        # (`suppressed=True`, `n` already `pd.NA`), which must stay
+        # excluded rather than become a fabricated zero.
+        no_row = merged["suppressed"].isna()
+        merged.loc[no_row, "n"] = 0
+        merged.loc[no_row, "suppressed"] = False
+        plotted = _drop_suppressed(merged)
+
+        if plotted.empty:
+            continue
+        x = [_quarter_start(y, q) for y, q in zip(plotted["year"], plotted["quarter"])]
+        quarter_label = [f"{y}-Q{q}" for y, q in zip(plotted["year"], plotted["quarter"])]
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=plotted["n"],
+                mode="lines+markers",
+                name=label,
+                line=dict(color=_STEP9_METRIC_COLORS[metric]),
+                marker=dict(color=_STEP9_METRIC_COLORS[metric]),
+                customdata=quarter_label,
+                hovertemplate=f"{label}<br>" "%{customdata}: %{y:.0f}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Quarterly trends",
+        xaxis_title="Quarter",
+        yaxis_title="Count",
+    )
+    return _add_suppression_caption(fig, trend_df)
