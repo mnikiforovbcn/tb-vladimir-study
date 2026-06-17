@@ -47,6 +47,7 @@ Design notes:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -856,3 +857,41 @@ def site_comparison_table(step10_dict: dict[str, object]) -> dict[str, object]:
         else:
             result[key] = _dataframe_to_table(value, titles)
     return result
+
+
+# --- Item 9: figure export helper -----------------------------------------------
+
+
+def export(fig: go.Figure, path: str | Path) -> dict[str, Path]:
+    """Save `fig` as both a static PNG (via `kaleido`) and an interactive
+    HTML file (Implementation Plan Phase 5 item 9).
+
+    Every chart/table function in this module (items 3-8) returns a
+    `go.Figure` (or a dict of them) and never writes to disk itself --
+    this is the one place in the module a figure actually becomes a
+    file. The PNG is for the embedded report/Word export (Phase 6); the
+    HTML is for interactive stakeholder review. A dict-returning function
+    (`baseline_table`, `site_comparison_table`) has no single figure to
+    hand this function -- call `export` once per figure in the dict (or
+    nested dict), choosing `path` per figure, rather than this function
+    trying to guess a naming scheme for a structure it didn't produce.
+
+    `path` is treated as a base path: any existing suffix is replaced,
+    so `"reports/figures/funnel"` and `"reports/figures/funnel.png"`
+    both write the same two files, `<path>.png` and `<path>.html`. The
+    parent directory is created if it doesn't already exist, mirroring
+    `cascade.persist_analysis_table`'s own `mkdir(parents=True,
+    exist_ok=True)` convention rather than requiring the caller to set
+    up the output directory first.
+
+    Returns `{"png": <png path>, "html": <html path>}` as `Path` objects
+    so a caller (or a Phase 5 item 10 test) can confirm what was written
+    without re-deriving the filenames itself.
+    """
+    base = Path(path).with_suffix("")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    png_path = base.with_suffix(".png")
+    html_path = base.with_suffix(".html")
+    fig.write_image(str(png_path))
+    fig.write_html(str(html_path))
+    return {"png": png_path, "html": html_path}
