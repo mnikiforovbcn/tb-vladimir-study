@@ -748,3 +748,111 @@ def baseline_table(step1_dict: dict[str, object], strata: str = "Source") -> dic
             "Contacts screened per index case, median/IQR",
         ),
     }
+
+
+# --- Item 8: Step 10 site comparison tables -------------------------------------
+
+#: One title per `step10_site_comparison` sub-table, keyed the same way
+#: `step10_dict` itself is keyed (plain string for a plain-DataFrame top-
+#: level key, nested dict of titles for a nested-dict top-level key).
+#: Titles and ordering are copied verbatim from `scripts/run_cascade.py`'s
+#: own Step 10 section (the plan's explicitly named precedent), so a
+#: reviewer sees the same table name in this module's figures as in the
+#: markdown report.
+_STEP10_TITLES: dict[str, str | dict[str, str]] = {
+    "screening_cascade": "Screening cascade by site",
+    "diagnostic_outcomes": "Diagnostic outcomes by site",
+    "lti_cascade": {
+        "cascade": "LTI cascade by site",
+        "initiation_delay": "Initiation delay by site",
+        "initiated_within_target": "Initiated within target by site",
+    },
+    "regimen": "Regimen by site",
+    "adherence_completion": {
+        "adherence_summary": "Adherence summary by site",
+        "dose_threshold": "Dose thresholds by site",
+        "outcome_distribution": "Outcome distribution by site",
+    },
+    "incentive_uptake": {
+        "uptake": "Incentive uptake by site",
+        "screening_payment_delay": "Screening payment delay by site",
+    },
+    "followup_outcomes": {
+        "rescreened_1yr": "Re-screened at 1yr by site",
+        "no_tb_after_1yr": "No TB after 1yr by site",
+        "rescreened_24mo": "Re-screened at 24mo by site",
+        "no_tb_after_24mo": "No TB after 24mo by site",
+        "final_outcome_distribution": "Final outcome distribution by site",
+        "final_outcome_by_completion": "Final outcome by completion by site",
+        "incidence_rate": "Incidence rate by site",
+    },
+}
+
+
+def _dataframe_to_table(df: pd.DataFrame, title: str) -> go.Figure:
+    """Render any one `step10_site_comparison` sub-table as a labeled
+    `go.Table` -- the generic, column-agnostic counterpart to item 7's two
+    purpose-built table renderers. Every sub-table reaching this function
+    has already been through `cascade.suppress_small_cells` (every
+    `stepN_*` function `step10_site_comparison` calls applies it before
+    returning), so the normal `_drop_suppressed`/`_add_suppression_caption`
+    policy applies directly -- unlike `table1` (item 7), there is no
+    suppression-incomplete special case here.
+
+    Renders every column of `df` as-is, in its existing order, the same
+    way `scripts/run_cascade.py`'s `_section`/`_df_md` renders a DataFrame
+    to markdown without dropping or reformatting any column -- this
+    function does not know or care which columns are `Source`, counts,
+    percentages, or medians, since that varies per sub-table.
+    """
+    plotted = _drop_suppressed(df)
+    fig = go.Figure(
+        go.Table(
+            header=dict(values=list(plotted.columns), align="left"),
+            cells=dict(
+                values=[plotted[c].astype(str).tolist() for c in plotted.columns],
+                align="left",
+            ),
+        )
+    )
+    fig.update_layout(title=title)
+    return _add_suppression_caption(fig, df)
+
+
+def site_comparison_table(step10_dict: dict[str, object]) -> dict[str, object]:
+    """Step 10 side-by-side site comparison tables (Implementation Plan
+    Phase 5 item 8).
+
+    Takes `cascade.step10_site_comparison(df, analysis_date)`'s return
+    dict directly. Its 7 top-level keys mix plain DataFrames
+    (`screening_cascade`, `diagnostic_outcomes`, `regimen`) with nested
+    dicts of DataFrames (`lti_cascade` x3, `adherence_completion` x3,
+    `incentive_uptake` x2, `followup_outcomes` x7) -- mirroring whichever
+    `stepN_*` function produced each one. `step10_site_comparison`'s own
+    docstring explicitly defers "rendering into one visual side-by-side
+    layout" to this function, but that does not mean flattening every
+    sub-table into a single combined table: the underlying schemas
+    (counts, medians, rates) are heterogeneous, so -- mirroring
+    `scripts/run_cascade.py`'s `_section` pattern -- each sub-table is
+    rendered as its own `go.Table` figure, one per actual table, using the
+    exact same titles that script already uses for its Step 10 section.
+
+    Returns a dict with the same shape as `step10_dict` itself: a plain
+    `go.Figure` wherever `step10_dict` had a plain DataFrame, and a nested
+    `dict[str, go.Figure]` wherever it had a nested dict -- the same
+    "mirror the input dict's own shape" choice `baseline_table` (item 7)
+    makes, rather than one flat dict of a dozen figures. Passing the wrong
+    dict raises a plain `KeyError` on the first missing key, same as
+    `baseline_table`.
+    """
+    result: dict[str, object] = {}
+    for key, titles in _STEP10_TITLES.items():
+        value = step10_dict[key]
+        if isinstance(titles, dict):
+            result[key] = {
+                sub_key: _dataframe_to_table(value[sub_key], sub_title)
+                for sub_key, sub_title in titles.items()
+            }
+        else:
+            result[key] = _dataframe_to_table(value, titles)
+    return result
