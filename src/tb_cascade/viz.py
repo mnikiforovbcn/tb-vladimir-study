@@ -612,3 +612,139 @@ def trend_lines(trend_df: pd.DataFrame) -> go.Figure:
         yaxis_title="Count",
     )
     return _add_suppression_caption(fig, trend_df)
+
+
+# --- Item 7: Step 1 baseline table --------------------------------------------
+
+#: Carried forward verbatim in spirit (Implementation Plan Phase 5 item 7)
+#: from the caveat `scripts/run_cascade.py` already attaches to `table1`:
+#: Step 1's `TableOne` categorical table is not yet suppression-safe
+#: (tracked as a follow-up -- see `cascade.step1_baseline_table`'s
+#: docstring), so this module must keep surfacing that caveat rather than
+#: silently presenting `table1` as already small-cell-safe the way every
+#: other table in this module is.
+_TABLE1_SUPPRESSION_CAVEAT: str = (
+    "Caveat: small-cell suppression is not yet applied to this categorical "
+    "table (tracked as a follow-up) -- review any small stratum before "
+    "sharing this section outside the team."
+)
+
+
+def _table1_to_table(table1: object, strata: str) -> go.Figure:
+    """Flatten `tableone.TableOne.tableone`'s two-level row/column
+    `MultiIndex` -- (variable label, level) rows x (`"Grouped by
+    {strata}"`, `Missing`/`Overall`/stratum-value) columns, confirmed
+    against the installed `tableone` 0.9.6 -- into a `go.Table`, since
+    Plotly has no native MultiIndex rendering. Cell values are already
+    `TableOne`-formatted `"n (%)"` strings; this never recomputes a count
+    or percentage, only reshapes.
+
+    A variable label (e.g. `"TargetGroup, n (%)"`) is shown once on the
+    first of its rows and left blank on the rest, mirroring `TableOne`'s
+    own merged-cell look in `str(table1)`. Stratum columns are reordered
+    into `_SITE_COLORS`'s canonical site order when `strata == "Source"`
+    and every stratum value is a known site (matching every other chart
+    in this module); otherwise left in whatever order `TableOne`
+    produced them.
+    """
+    raw = table1.tableone
+
+    variable_col: list[str] = []
+    level_col: list[str] = []
+    prev_variable = None
+    for variable, level in raw.index:
+        variable_col.append(variable if variable != prev_variable else "")
+        level_col.append(level)
+        prev_variable = variable
+
+    stat_cols = list(raw.columns.get_level_values(1))
+    fixed = [c for c in stat_cols if c in ("Missing", "Overall")]
+    strata_cols = [c for c in stat_cols if c not in ("Missing", "Overall")]
+    if strata == "Source" and set(strata_cols) <= set(_SITE_COLORS):
+        strata_cols = [s for s in _SITE_COLORS if s in strata_cols]
+    ordered_stat_cols = fixed + strata_cols
+
+    header = ["Variable", "Level", *ordered_stat_cols]
+    cells = [variable_col, level_col] + [
+        raw.xs(c, axis=1, level=1).iloc[:, 0].fillna("").astype(str).tolist()
+        for c in ordered_stat_cols
+    ]
+
+    fig = go.Figure(
+        go.Table(
+            header=dict(values=header, align="left"),
+            cells=dict(values=cells, align="left"),
+        )
+    )
+    fig.update_layout(title=f"Baseline characteristics by {strata} (Table 1)")
+    fig.add_annotation(text=_TABLE1_SUPPRESSION_CAVEAT, **_CAPTION_ANNOTATION_STYLE)
+    return fig
+
+
+def _summary_row_to_table(summary_df: pd.DataFrame, title: str) -> go.Figure:
+    """Render a single-row `n`/`median`/`q1`/`q3`/`suppressed` summary
+    (`age_summary` or `contacts_per_index_case` from `cascade.step1_
+    baseline_table`) as a small `go.Table`. Unlike `table1`, both of
+    these *are* already suppression-safe, so this applies the module's
+    normal `_drop_suppressed`/`_add_suppression_caption` policy instead
+    of `table1`'s special-case caveat -- if the one row is suppressed,
+    the table renders with headers only and the caption states "1 of 1
+    cell suppressed" rather than showing a fabricated or hidden value.
+    """
+    plotted = _drop_suppressed(summary_df)
+    header = ["n", "median", "q1", "q3"]
+    cells = [
+        plotted["n"].astype("Int64").astype(str).tolist(),
+        plotted["median"].astype(float).round(1).astype(str).tolist(),
+        plotted["q1"].astype(float).round(1).astype(str).tolist(),
+        plotted["q3"].astype(float).round(1).astype(str).tolist(),
+    ]
+    fig = go.Figure(
+        go.Table(
+            header=dict(values=header, align="left"),
+            cells=dict(values=cells, align="left"),
+        )
+    )
+    fig.update_layout(title=title)
+    return _add_suppression_caption(fig, summary_df)
+
+
+def baseline_table(step1_dict: dict[str, object], strata: str = "Source") -> dict[str, go.Figure]:
+    """Step 1 baseline characteristics presentation table (Implementation
+    Plan Phase 5 item 7), satisfying Descriptive Study Plan Sec 9's
+    "Table 1-style summary table of baseline characteristics by site"
+    bullet.
+
+    Takes `cascade.step1_baseline_table(df, strata=strata)`'s return
+    dict directly (`table1`, `age_summary`, `contacts_per_index_case`)
+    and renders each of its three parts as its own `go.Table` figure,
+    returned in a matching `{"table1": ..., "age_summary": ...,
+    "contacts_per_index_case": ...}` dict -- mirroring `step1_dict`'s own
+    shape rather than forcing three differently-shaped tables into one
+    figure (the same reasoning `site_comparison_table`, item 8, uses for
+    its own dozen sub-tables). Passing the wrong dict raises a plain
+    `KeyError` on the missing key, same as `_drop_suppressed` raising on
+    a missing `suppressed` column elsewhere in this module.
+
+    `table1` carries forward the exact suppression caveat
+    `scripts/run_cascade.py` already attaches to it (Step 1's `TableOne`
+    categorical table is not yet small-cell-safe -- tracked as a
+    follow-up) as a caption on its own figure, rather than the usual
+    `_add_suppression_caption` count, since there is no `suppressed`
+    column to count there. `age_summary` and `contacts_per_index_case`
+    *are* already suppression-safe and get the normal caption.
+
+    `strata` must match whatever `strata` the caller passed to
+    `step1_baseline_table` -- used only to decide whether the stratum
+    columns can be reordered into `_SITE_COLORS`'s canonical site order
+    (when `strata == "Source"`) or must be left as `TableOne` produced
+    them.
+    """
+    return {
+        "table1": _table1_to_table(step1_dict["table1"], strata),
+        "age_summary": _summary_row_to_table(step1_dict["age_summary"], "Age (years), median/IQR"),
+        "contacts_per_index_case": _summary_row_to_table(
+            step1_dict["contacts_per_index_case"],
+            "Contacts screened per index case, median/IQR",
+        ),
+    }
