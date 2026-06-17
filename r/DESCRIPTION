@@ -1,0 +1,44 @@
+Package: tbcascade
+Title: TB Preventive Treatment Cascade Descriptive Analysis (Vladimir Oblast)
+Version: 0.1.0
+Authors@R: person("TB Vladimir Study Team", role = c("aut", "cre"), email = "noreply@example.com")
+Description: Implements the descriptive epidemiological study plan for the
+    Vladimir Oblast TB preventive treatment program: ingestion and schema
+    validation of the VladKovMur_dataset.csv registry export, derived
+    variables (age, adherence, time intervals, cascade-step flags),
+    screening-to-outcome cascade analytics with confidence intervals and
+    small-cell suppression, and report-ready visualizations.
+License: MIT
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+Depends: R (>= 4.1)
+Imports:
+    readr,
+    dplyr,
+    tidyr,
+    lubridate,
+    stringr,
+    purrr,
+    tibble,
+    rlang,
+    arrow,
+    pointblank,
+    binom,
+    gtsummary,
+    gt,
+    ggplot2,
+    plotly,
+    htmlwidgets,
+    rprojroot,
+    glue
+Suggests:
+    testthat (>= 3.0.0),
+    devtools,
+    roxygen2,
+    optparse,
+    knitr,
+    quarto,
+    withr
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

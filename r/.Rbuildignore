@@ -1,0 +1,9 @@
+^renv$
+^renv\.lock$
+^\.Rproj\.user$
+^.*\.Rproj$
+^scripts$
+^report$
+^reports$
+^README\.md$
+^Makefile$
