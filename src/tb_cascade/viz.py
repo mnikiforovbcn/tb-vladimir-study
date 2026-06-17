@@ -46,10 +46,13 @@ Design notes:
 
 from __future__ import annotations
 
-import plotly.graph_objects as go
-import pandas as pd
+import math
 
-from tb_cascade.cascade import SMALL_CELL_THRESHOLD
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from tb_cascade.cascade import _LABEL_MAPS, _STEP2_STAGES, SMALL_CELL_THRESHOLD
 
 #: Fixed `Source` -> color mapping, reused anywhere `Source` is a
 #: plotted dimension. Keys match `schema.SOURCE_VALUES` exactly
@@ -144,3 +147,170 @@ def _add_suppression_caption(
     caption = _suppression_caption(df, suppressed_col=suppressed_col)
     fig.add_annotation(text=caption, **_CAPTION_ANNOTATION_STYLE)
     return fig
+
+
+# --- Item 3: Step 2 screening cascade funnel ---------------------------------
+
+#: Human-readable label per `cascade._STEP2_STAGES` key, for the funnel's
+#: y-axis -- the raw keys (`"suspected_tb"`, `"diaskintest_positive"`)
+#: are SQL-friendly identifiers, not presentation text.
+_STEP2_STAGE_LABELS: dict[str, str] = {
+    "screened": "Screened",
+    "suspected_tb": "Suspected TB",
+    "diaskintest_positive": "Diaskintest positive",
+    "full_eval": "Fully evaluated",
+}
+
+
+def _validate_step2_stages(cascade_df: pd.DataFrame, *, caller: str, group_col: str | None) -> None:
+    """Shared guard for `funnel_chart`/`funnel_chart_by_group`: the input
+    must have exactly one row per `cascade._STEP2_STAGES` stage (times
+    one per observed `group_col` value, if given) -- catches a caller
+    accidentally passing the wrong step's table, or the wrong shape of
+    this one (e.g. missing/extra `group_by`), before it silently
+    produces a malformed figure.
+    """
+    actual_stages = set(cascade_df["stage"]) if "stage" in cascade_df.columns else set()
+    expected_stages = set(_STEP2_STAGES)
+    if actual_stages != expected_stages:
+        raise ValueError(
+            f"{caller}: expected stages {sorted(expected_stages)}, got "
+            f"{sorted(actual_stages)} -- is this cascade.step2_screening_"
+            f"cascade(df{f', group_by=[{group_col!r}]' if group_col else ''})?"
+        )
+    if group_col is None:
+        if len(cascade_df) != len(_STEP2_STAGES):
+            raise ValueError(
+                f"{caller}: expected exactly {len(_STEP2_STAGES)} rows (one "
+                f"per stage, no group_by), got {len(cascade_df)} rows."
+            )
+    else:
+        if group_col not in cascade_df.columns:
+            raise KeyError(
+                f"{caller}: '{group_col}' column not found -- was this "
+                f"cascade.step2_screening_cascade(df, group_by=['{group_col}'])?"
+            )
+        n_groups = cascade_df[group_col].nunique(dropna=True)
+        if len(cascade_df) != len(_STEP2_STAGES) * n_groups:
+            raise ValueError(
+                f"{caller}: expected exactly one row per (stage, {group_col}) "
+                f"combination ({len(_STEP2_STAGES)} stages x {n_groups} "
+                f"groups = {len(_STEP2_STAGES) * n_groups} rows), got "
+                f"{len(cascade_df)} rows."
+            )
+
+
+def _step2_funnel_trace(plotted: pd.DataFrame) -> go.Funnel:
+    """Build the one `go.Funnel` trace shared by `funnel_chart` (item 3)
+    and `funnel_chart_by_group` (item 4) -- both render the same
+    per-stage funnel geometry/hover/text convention, just arranged into
+    a different figure layout (single figure vs. subplot grid), per the
+    plan's "distinct layout problem, not a parameter tweak" framing.
+
+    `plotted` must already be ordered per `cascade._STEP2_STAGES` and
+    have had `_drop_suppressed` applied -- this helper does neither, so
+    each caller's own ordering/filtering step runs first.
+    """
+    customdata = plotted[["n", "count", "ci_low", "ci_high"]].astype(float)
+    return go.Funnel(
+        y=[_STEP2_STAGE_LABELS[s] for s in plotted["stage"]],
+        x=plotted["pct"],
+        customdata=customdata,
+        # cascade.py's `pct`/`ci_low`/`ci_high` are 0-1 fractions, not
+        # 0-100 -- the d3-format "%" type (not plain "f") multiplies by
+        # 100 and appends "%" itself, so it must be used here rather
+        # than a hand-rolled "...:.1f}%" suffix.
+        texttemplate="%{x:.1%}",
+        hovertemplate=(
+            "%{y}<br>"
+            "%{customdata[1]:.0f} of %{customdata[0]:.0f} (%{x:.1%})<br>"
+            "95% CI %{customdata[2]:.1%}-%{customdata[3]:.1%}"
+            "<extra></extra>"
+        ),
+    )
+
+
+def funnel_chart(cascade_df: pd.DataFrame) -> go.Figure:
+    """Step 2 screening cascade funnel (Implementation Plan Phase 5 item 3).
+
+    Takes `cascade.step2_screening_cascade(df)`'s long-format output
+    directly (`stage`, `n`, `count`, `pct`, `ci_low`, `ci_high`,
+    `suppressed`) called with *no* `group_by` -- exactly one row per
+    `cascade._STEP2_STAGES` stage, for the whole cohort. The per-
+    `TargetGroup` small-multiples version (Phase 5 item 4) is
+    `funnel_chart_by_group`, a separate function, since faceting into a
+    subplot grid is a distinct layout problem, not a parameter on this
+    figure.
+
+    Plotted by `pct` (not raw `count`), so the funnel reads the same
+    regardless of cohort size. Bars are ordered per `cascade._STEP2_
+    STAGES` (screened -> suspected_tb -> diaskintest_positive ->
+    full_eval) regardless of the input row order, and any
+    `suppressed=True` stage is dropped from the funnel geometry (its
+    `pct` is already `pd.NA`) with a caption noting how many stages
+    were suppressed.
+    """
+    _validate_step2_stages(cascade_df, caller="funnel_chart", group_col=None)
+
+    ordered = cascade_df.set_index("stage").loc[list(_STEP2_STAGES)].reset_index()
+    plotted = _drop_suppressed(ordered)
+
+    fig = go.Figure(_step2_funnel_trace(plotted))
+    fig.update_layout(
+        title="Screening cascade (% of cohort)",
+        xaxis_tickformat=".0%",
+    )
+    return _add_suppression_caption(fig, ordered)
+
+
+def funnel_chart_by_group(cascade_df: pd.DataFrame, group_col: str = "TargetGroup") -> go.Figure:
+    """Per-`group_col` small multiples of the Step 2 screening funnel
+    (Implementation Plan Phase 5 item 4) -- a distinct layout problem
+    from `funnel_chart` (item 3), not a parameter on the same figure.
+    `group_col` defaults to `"TargetGroup"`, the plan's stated use case
+    (`cascade.step2_screening_cascade(df, group_by=["TargetGroup"])`),
+    but any single `cascade._ALLOWED_GROUP_DIMS` column works the same
+    way -- faceting only needs `group_col` to be a label column
+    alongside `stage`/`n`/.../`suppressed`.
+
+    Takes `cascade.step2_screening_cascade(df, group_by=[group_col])`'s
+    long-format output directly -- one row per (`stage`, `group_col`
+    value). Renders one funnel sub-chart per observed `group_col` value
+    in a grid, each sharing the same stage order, x-axis scale, and
+    hover/text convention as `funnel_chart`, so the panels are directly
+    comparable to each other and to the overall funnel.
+
+    Facets are ordered using `cascade._LABEL_MAPS[group_col]`'s own
+    value order when `group_col` is one of its coded columns (e.g.
+    TargetGroup always reads Contact -> Homeless -> PLHIV -> Other
+    left-to-right), rather than whatever order SQL `GROUP BY` happened
+    to return; falls back to alphabetical for an uncoded `group_col`
+    (e.g. `Source`).
+    """
+    _validate_step2_stages(cascade_df, caller="funnel_chart_by_group", group_col=group_col)
+
+    observed = set(cascade_df[group_col].dropna())
+    if group_col in _LABEL_MAPS:
+        canonical = [v for v in _LABEL_MAPS[group_col].values() if v in observed]
+        canonical += sorted(observed - set(canonical))
+    else:
+        canonical = sorted(observed)
+
+    n = len(canonical)
+    n_cols = math.ceil(math.sqrt(n)) if n else 1
+    n_rows = math.ceil(n / n_cols) if n else 1
+
+    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=[str(g) for g in canonical])
+    for idx, group_value in enumerate(canonical):
+        row, col = divmod(idx, n_cols)
+        facet = cascade_df.loc[cascade_df[group_col] == group_value]
+        ordered = facet.set_index("stage").loc[list(_STEP2_STAGES)].reset_index()
+        plotted = _drop_suppressed(ordered)
+        fig.add_trace(_step2_funnel_trace(plotted), row=row + 1, col=col + 1)
+
+    fig.update_xaxes(tickformat=".0%")
+    fig.update_layout(
+        title=f"Screening cascade by {group_col} (% of cohort)",
+        showlegend=False,
+    )
+    return _add_suppression_caption(fig, cascade_df)
