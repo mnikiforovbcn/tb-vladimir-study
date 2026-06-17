@@ -37,6 +37,18 @@ Which Sec 6 items live where
   Implementation Plan assigns `censoring_flag()` to Phase 3
   (`derive.py`), since it produces an analysis variable rather than a
   pass/fail QC violation.
+
+Report-support functions (feed `render_qc_report`, not part of Sec 6
+itself):
+- `run_qc_by_site` -- the same per-rule totals as `run_qc(df).summary`,
+  broken out by `Source` (plus an `ALL_SOURCES` total row per rule), so
+  the rendered report can show whether a rule's violations are
+  concentrated at one site.
+- `date_order_pair_breakdown` -- `check_date_order` collapses four
+  pairwise date comparisons into one True/False/NA per record; this
+  breaks that back out by adjacent pair (and by site), since a single
+  rule-level rate can hide one bad transition driving most of the
+  violations.
 """
 
 from __future__ import annotations
@@ -119,6 +131,18 @@ def check_outcome_mutual_exclusivity(df: pd.DataFrame) -> pd.Series:
     return violation
 
 
+#: The expected chronological order checked by `check_date_order`, and
+#: broken down pairwise by `date_order_pair_breakdown` (Descriptive Study
+#: Plan Sec 6 item 3, bullet 3).
+DATE_ORDER_SEQUENCE: list[str] = [
+    "DateScreening",
+    "DateCompleteExaminationTB",
+    "DatePrevTreatmentStart",
+    "DateTreatmentScheme",
+    "DateOutcome",
+]
+
+
 def check_date_order(df: pd.DataFrame) -> pd.Series:
     """Flag records with any reversal in the expected date sequence.
 
@@ -127,18 +151,16 @@ def check_date_order(df: pd.DataFrame) -> pd.Series:
     Each consecutive pair is only checked where both dates are present;
     a record with fewer than two populated dates in the sequence is not
     applicable.
+
+    This collapses all four pairwise comparisons in `DATE_ORDER_SEQUENCE`
+    into one True/False/NA per record -- enough for a single rule-level
+    violation rate, but it hides which specific transition is driving
+    it. Use `date_order_pair_breakdown` to see that detail.
     """
-    sequence = [
-        "DateScreening",
-        "DateCompleteExaminationTB",
-        "DatePrevTreatmentStart",
-        "DateTreatmentScheme",
-        "DateOutcome",
-    ]
     violation = pd.Series(False, index=df.index, dtype="boolean")
     any_pair_checkable = pd.Series(False, index=df.index)
 
-    for earlier, later in zip(sequence[:-1], sequence[1:]):
+    for earlier, later in zip(DATE_ORDER_SEQUENCE[:-1], DATE_ORDER_SEQUENCE[1:]):
         both_present = df[earlier].notna() & df[later].notna()
         reversed_pair = both_present & (df[earlier] > df[later])
         violation = violation | reversed_pair.astype("boolean")
@@ -146,6 +168,44 @@ def check_date_order(df: pd.DataFrame) -> pd.Series:
 
     violation[~any_pair_checkable] = pd.NA
     return violation
+
+
+def date_order_pair_breakdown(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-adjacent-pair detail behind `check_date_order`, overall and by ``Source``.
+
+    Returns one row per (earlier, later, source) -- including the
+    ``ALL_SOURCES`` aggregate -- with the count of records where both
+    dates in that pair are present, how many of those are reversed
+    (``earlier`` date after ``later`` date), and the resulting reversal
+    rate. A high overall `check_date_order` violation rate can come from
+    one bad transition or be spread evenly across all four; this is what
+    distinguishes the two (e.g. a data-entry problem concentrated in one
+    field vs. a sequence assumption that doesn't hold operationally).
+    """
+    sources = [ALL_SOURCES, *sorted(df["Source"].dropna().unique().tolist())]
+    rows = []
+    for earlier, later in zip(DATE_ORDER_SEQUENCE[:-1], DATE_ORDER_SEQUENCE[1:]):
+        both_present = df[earlier].notna() & df[later].notna()
+        reversed_pair = both_present & (df[earlier] > df[later])
+        for source in sources:
+            mask = (
+                pd.Series(True, index=df.index)
+                if source == ALL_SOURCES
+                else (df["Source"] == source)
+            )
+            n_both = int((both_present & mask).sum())
+            n_reversed = int((reversed_pair & mask).sum())
+            rows.append(
+                {
+                    "earlier": earlier,
+                    "later": later,
+                    "source": source,
+                    "n_both_present": n_both,
+                    "n_reversed": n_reversed,
+                    "reversal_rate": (n_reversed / n_both) if n_both else float("nan"),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def check_doses_taken_le_schema(df: pd.DataFrame) -> pd.Series:
@@ -304,6 +364,46 @@ def run_qc(df: pd.DataFrame) -> QCResult:
     return QCResult(summary=summary, flagged=flagged)
 
 
+def run_qc_by_site(df: pd.DataFrame) -> pd.DataFrame:
+    """Same metrics as ``run_qc(df).summary``, broken out by ``Source``.
+
+    Returns one row per (rule, source) -- including an ``ALL_SOURCES``
+    total row per rule -- so the rendered report can show each rule's
+    overall rate alongside its per-site rates, e.g. to catch a violation
+    pattern concentrated at one site. Kept separate from `run_qc` (whose
+    `summary`/`flagged` shape is depended on elsewhere) so existing
+    callers are unaffected; this recomputes each `CHECKS` function rather
+    than reusing `run_qc`'s results, which is cheap at this data scale.
+    """
+    sources = [ALL_SOURCES, *sorted(df["Source"].dropna().unique().tolist())]
+    rows = []
+    for name, func in CHECKS:
+        result = func(df)
+        if result.dtype != "boolean":
+            result = result.astype("boolean")
+
+        for source in sources:
+            mask = (
+                pd.Series(True, index=df.index)
+                if source == ALL_SOURCES
+                else (df["Source"] == source)
+            )
+            sub = result.loc[mask]
+            n_checked = int(sub.notna().sum())
+            n_violations = int(sub.sum())
+            violation_rate = (n_violations / n_checked) if n_checked else float("nan")
+            rows.append(
+                {
+                    "rule": name,
+                    "source": source,
+                    "n_checked": n_checked,
+                    "n_violations": n_violations,
+                    "violation_rate": violation_rate,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 # --- Missingness audit (Phase 2 step 5) ----------------------------------
 
 StructuralRule = Callable[[pd.DataFrame], pd.Series]
@@ -373,8 +473,9 @@ STRUCTURAL_MISSINGNESS_RULES: dict[str, StructuralRule] = {
     "DateSupp1yearGr1": lambda df: df["Supp1yearGr1"] == True,  # noqa: E712
 }
 
-#: Sentinel used in the `source` column of `missingness_audit`'s output
-#: for the all-sites aggregate row, alongside the real `Source` values.
+#: Sentinel used in the `source` column of `missingness_audit`'s,
+#: `run_qc_by_site`'s, and `date_order_pair_breakdown`'s output for the
+#: all-sites aggregate row, alongside the real `Source` values.
 ALL_SOURCES = "__ALL__"
 
 
@@ -435,27 +536,76 @@ def missingness_audit(df: pd.DataFrame) -> pd.DataFrame:
 # --- Report rendering (Phase 2 step 4) -----------------------------------
 
 
-def render_qc_report(qc_result: QCResult, missingness: pd.DataFrame, path: Path) -> Path:
+def render_qc_report(
+    qc_result: QCResult,
+    missingness: pd.DataFrame,
+    by_site: pd.DataFrame,
+    date_order_detail: pd.DataFrame,
+    path: Path,
+) -> Path:
     """Render the technical QC appendix referenced in Descriptive Study Plan Sec 12.3.
 
-    Writes a single Markdown file with two sections: the internal
-    consistency rule summary (rule name, # checked, # violations,
-    violation rate) and the overall (all-sources) missingness table.
-    Per-site missingness breakdowns are available in `missingness`
-    itself (this report only renders the `ALL_SOURCES` slice, to keep
-    the rendered appendix a readable size).
+    Writes a single Markdown file with three sections:
+
+    1. Internal consistency rules -- one row per (rule, site), from
+       `run_qc_by_site`, plus a "Total" row per rule. Showing sites
+       alongside the total lets a reviewer see whether a rule's
+       violations are spread evenly or concentrated at one site --
+       ``Source``/site names are aggregate labels, not row-level
+       identifiers, so this carries no linkage-key risk.
+    2. Date order detail -- the per-adjacent-pair breakdown behind the
+       `date_order` rule, from `date_order_pair_breakdown` (all-sites
+       only here, to keep this a readable size; call that function
+       directly for the per-site detail).
+    3. Missingness audit -- the overall (all-sources) missingness table.
+       Per-site missingness breakdowns are available in `missingness`
+       itself (this report only renders the `ALL_SOURCES` slice, to keep
+       the rendered appendix a readable size).
     """
     lines = ["# QC Report", ""]
 
     lines.append("## Internal consistency rules")
     lines.append("")
-    lines.append("| Rule | # checked | # violations | Violation rate |")
-    lines.append("|---|---|---|---|")
-    for _, row in qc_result.summary.iterrows():
-        rate = "n/a" if pd.isna(row["violation_rate"]) else f"{row['violation_rate']:.2%}"
-        lines.append(f"| {row['rule']} | {row['n_checked']} | {row['n_violations']} | {rate} |")
+    lines.append("| Rule | Site | # checked | # violations | Violation rate |")
+    lines.append("|---|---|---|---|---|")
+    site_order = [
+        ALL_SOURCES,
+        *sorted(s for s in by_site["source"].unique() if s != ALL_SOURCES),
+    ]
+    for name, _ in CHECKS:
+        rule_rows = by_site.loc[by_site["rule"] == name].set_index("source")
+        for source in site_order:
+            if source not in rule_rows.index:
+                continue
+            row = rule_rows.loc[source]
+            site_label = "Total" if source == ALL_SOURCES else source
+            rate = "n/a" if pd.isna(row["violation_rate"]) else f"{row['violation_rate']:.2%}"
+            lines.append(
+                f"| {name} | {site_label} | {row['n_checked']} | "
+                f"{row['n_violations']} | {rate} |"
+            )
     lines.append("")
     lines.append(f"Total flagged (rule, record) pairs: {len(qc_result.flagged)}.")
+    lines.append("")
+
+    lines.append("## Date order detail")
+    lines.append("")
+    lines.append(
+        "Per-adjacent-pair breakdown behind the `date_order` rule above (all "
+        "sites) -- a high overall rate concentrated in one row below means "
+        "one transition is driving it, rather than reversals being spread "
+        "evenly across the whole expected sequence."
+    )
+    lines.append("")
+    lines.append("| Earlier | Later | # both present | # reversed | Reversal rate |")
+    lines.append("|---|---|---|---|---|")
+    overall_dates = date_order_detail.loc[date_order_detail["source"] == ALL_SOURCES]
+    for _, row in overall_dates.iterrows():
+        rate = "n/a" if pd.isna(row["reversal_rate"]) else f"{row['reversal_rate']:.2%}"
+        lines.append(
+            f"| {row['earlier']} | {row['later']} | {row['n_both_present']} | "
+            f"{row['n_reversed']} | {rate} |"
+        )
     lines.append("")
 
     lines.append("## Missingness audit (all sites)")
@@ -467,4 +617,12 @@ def render_qc_report(qc_result: QCResult, missingness: pd.DataFrame, path: Path)
     )
     for _, row in overall.iterrows():
         col_name = row["column"]
-        line
+        lines.append(
+            f"| {col_name} | {row['n_rows']} | {row['n_null']} | "
+            f"{row['null_rate']:.1%} | {row['n_structural_null']} | "
+            f"{row['n_unexplained_null']} | {row['has_structural_rule']} |"
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
