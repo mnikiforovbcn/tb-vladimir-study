@@ -1,0 +1,384 @@
+---
+title: "Каскад превентивного лечения туберкулёза — описательный отчёт"
+subtitle: "Владимир, Ковров и Муром (Владимирская область, Российская Федерация)"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+  gfm:
+    toc: true
+jupyter: tb-cascade
+execute:
+  echo: false
+  warning: false
+---
+
+<!--
+Russian-language sibling of `descriptive_report.qmd` (Phase 6 follow-up:
+"separate Russian report, presentation-layer dictionary"). Mirrors the
+English report section-for-section and calls the exact same
+`cascade.py`/`trends.py`/`viz.py` functions on the exact same `df` --
+every number in this report is computed by the same Phase 4/5 code the
+English report uses, completely unmodified. The only thing specific to
+this file is `report/i18n_ru.py`, a presentation-layer module that
+translates column headers, category labels, and chart text into Russian
+just before display -- see that module's own docstring for why a
+translation *dictionary* applied at render time, rather than translating
+the DataFrames themselves, is the safe approach (`viz.py`'s chart
+functions key fixed coloring/ordering off literal English strings).
+
+Disclosed simplification: Steps 1 and 10 are rendered here as Russian
+markdown tables rather than the interactive `go.Table` figures
+`viz.baseline_table`/`viz.site_comparison_table` produce for the English
+report (see `i18n_ru.py`'s docstring) -- the numbers are identical, only
+the rendering technique differs for those two steps.
+
+Parameters follow the same Quarto/Jupyter convention as the English
+report, e.g.
+    quarto render report/descriptive_report_ru.qmd -P as_of:2026-07-01
+-->
+
+```{python}
+#| label: parameters
+#| tags: [parameters]
+
+as_of: str = "2026-06-16"  # дата анализа: зрелость Шага 8 + человеко-время для частоты заболеваемости
+analysis_ready_path: str = ""  # путь к analysis_ready_<date>.parquet; "" = пересобрать из исходных данных
+window_months: int = 12  # окно цензурирования (мес.) при пересборке из исходных данных
+```
+
+```{python}
+#| label: load-data
+#| include: false
+
+import pandas as pd
+from IPython.display import Markdown, display
+
+from tb_cascade import cascade, derive, trends, viz
+from tb_cascade.config import ROOT_DIR, RAW_DATA_PATH
+from tb_cascade.io import load_raw
+
+import i18n_ru as ru
+
+# `raw` загружается всегда (дешёвое чтение CSV при таком объёме данных),
+# даже если задан `analysis_ready_path` -- строки QC в шапке отчёта
+# считаются по исходным данным, как и в английской версии отчёта.
+raw = load_raw()
+if analysis_ready_path:
+    df = pd.read_parquet(analysis_ready_path)
+else:
+    df = derive.build_analysis_table(raw, as_of, window_months=window_months)
+
+n_records = len(df)
+```
+
+## Метаданные отчёта
+
+```{python}
+#| label: report-header
+
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from tb_cascade import qc
+
+
+def _git_commit_hash(root: Path) -> str:
+    """Короткий хеш коммита, на котором построен этот отчёт, с суффиксом
+    `+dirty`, если в рабочей директории есть незакоммиченные изменения.
+    Возвращает "unknown" вне git-репозитория."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root, capture_output=True, text=True, check=True,
+            ).stdout.strip()
+        )
+        return commit + ("+dirty" if dirty else "")
+    except Exception:
+        return "unknown"
+
+
+def _data_snapshot_date(path: Path) -> str:
+    """Дата последнего изменения файла, из которого реально загружены
+    данные для этого запуска (дата снимка реестра, а не сегодняшняя
+    дата)."""
+    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+    return f"{mtime:%Y-%m-%d} ({path.name})"
+
+
+# Строки QC по каждому правилу Раздела 6, по исходным данным -- только
+# `summary` (rule/n_checked/n_violations/violation_rate), никогда
+# `flagged` (содержит ключи Source/Nomer и не допускается в отчёт, см.
+# Раздел 11).
+qc_summary = qc.run_qc(raw).summary
+
+snapshot_source = Path(analysis_ready_path) if analysis_ready_path else RAW_DATA_PATH
+
+print(f"Дата анализа (as_of): {as_of}")
+print(f"Снимок данных: {_data_snapshot_date(snapshot_source)}")
+print(f"Коммит пайплайна: {_git_commit_hash(ROOT_DIR)}")
+print(f"Записей (n): {n_records}")
+```
+
+```{python}
+#| label: report-header-qc
+
+ru.ru_table(
+    qc_summary,
+    value_maps={"rule": ru.QC_RULE_LABELS_RU},
+    note=(
+        "Счётчики строк по правилам контроля качества (Описательный план "
+        "исследования §6): `n проверено` — знаменатель, к которому "
+        "применялось правило (без неприменимых записей), `n нарушений` — "
+        "сколько из них правило не прошло. Рассчитано по исходным данным "
+        "до применения производных переменных; полное приложение по "
+        "каждой площадке — в `reports/qc_report.md`."
+    ),
+)
+```
+
+Во всех таблицах и графиках ниже малые ячейки (n < 5) подавлены согласно
+Описательному плану исследования §11. Никакие идентификаторы записей
+(`Source_id`, `Nomer`, `IndexCase`) не показаны в этом отчёте — `Source`
+(площадка) присутствует только как агрегированная группирующая переменная.
+
+## Шаг 1 — Профиль популяции (Таблица 1)
+
+Частоты/доли по площадке, целевой группе, полу, возрастной группе и связи
+с источником (для контактных лиц), в целом и по площадкам; медиана/МКИ
+для возраста и числа контактов, обследованных на одного индекс-пациента.
+
+```{python}
+#| label: step1
+
+step1 = cascade.step1_baseline_table(df)
+ru.ru_table1(step1["table1"])
+ru.ru_summary_row(step1["age_summary"], "Возраст (лет), медиана/МКИ")
+ru.ru_summary_row(
+    step1["contacts_per_index_case"],
+    "Контактов, обследованных на одного индекс-пациента, медиана/МКИ",
+)
+```
+
+## Шаг 2 — Каскад скрининга
+
+Доля прошедших скрининг → с подозрением на ТБ → с положительным
+Диаскинтестом → полностью обследованных, по всей когорте и по целевой
+группе/площадке.
+
+```{python}
+#| label: step2
+
+step2 = cascade.step2_screening_cascade(df)
+display(ru.funnel_chart_ru(step2))  # общий каскад
+
+step2_by_group = cascade.step2_screening_cascade(df, group_by=["TargetGroup"])
+display(ru.funnel_chart_by_group_ru(step2_by_group, group_col="TargetGroup"))
+
+step2_by_site = cascade.step2_screening_cascade(df, group_by=["Source"])
+display(ru.funnel_chart_by_group_ru(step2_by_site, group_col="Source"))
+```
+
+## Шаг 3 — Диагностические исходы
+
+Среди полностью обследованных: доля подтверждённого ТБ, ЛТИ, "нет ТБ, нет
+ЛТИ", "нет ТБ, статус ЛТИ неизвестен"; с разбивкой по целевой группе и
+площадке.
+
+```{python}
+#| label: step3
+
+step3 = cascade.step3_diagnostic_outcomes(df)
+ru.ru_table(step3, value_maps=ru.vmaps({"category": ru.DIAGNOSIS_BRANCH_RU}))
+
+step3_by_group = cascade.step3_diagnostic_outcomes(df, group_by=["TargetGroup"])
+ru.ru_table(
+    step3_by_group,
+    value_maps=ru.vmaps({"category": ru.DIAGNOSIS_BRANCH_RU}),
+    note="По целевой группе",
+)
+
+step3_by_site = cascade.step3_diagnostic_outcomes(df, group_by=["Source"])
+ru.ru_table(
+    step3_by_site,
+    value_maps=ru.vmaps({"category": ru.DIAGNOSIS_BRANCH_RU}),
+    note="По площадке",
+)
+```
+
+## Шаг 4 — Каскад превентивного лечения ЛТИ
+
+Среди тех, кому показано лечение: рекомендовано → назначено → начато;
+задержка начала лечения (дни, медиана/МКИ) и доля начавших лечение в
+течение 30/60 дней.
+
+```{python}
+#| label: step4
+
+# Метки этапов в step4["cascade"] ("recommended"/"prescribed"/"started")
+# не совпадают с набором этапов Шага 2, поэтому funnel_chart_ru здесь не
+# подходит (он проверяет фиксированный набор этапов Шага 2) — показано
+# как таблица.
+step4 = cascade.step4_lti_cascade(df)
+ru.ru_table(
+    step4["cascade"],
+    value_maps=ru.vmaps({"stage": ru.STAGE_LABELS_RU}),
+    note="Этапы каскада (% от показанных к лечению ЛТИ)",
+)
+ru.ru_table(
+    step4["initiation_delay"],
+    note="Задержка от диагноза до начала лечения (дни), медиана/МКИ",
+)
+ru.ru_table(step4["initiated_within_target"], note="Начато в течение целевого срока")
+```
+
+## Шаг 5 — Описание режима лечения
+
+Среди начавших лечение: режимы, содержащие бедаквилин (`RegBq`) и
+моксифлоксацин (`RegMfx`), по площадке и по году начала лечения.
+
+```{python}
+#| label: step5
+
+step5 = cascade.step5_regimen_description(df)
+ru.ru_table(step5, value_maps=ru.vmaps({"regimen": ru.REGIMEN_RU}))
+
+step5_by_year = cascade.step5_regimen_description(df, group_by=["Source", "treat_start_year"])
+ru.ru_table(
+    step5_by_year,
+    value_maps=ru.vmaps({"regimen": ru.REGIMEN_RU}),
+    note="По площадке и году начала лечения",
+)
+```
+
+## Шаг 6 — Приверженность и завершение лечения
+
+Распределение доли принятых доз; доля достигших порогов 50%/100%; состав
+исходов лечения (завершено/окончено/категории незавершения) в виде
+столбчатой диаграммы с накоплением, в сумме 100% от начавших лечение.
+
+```{python}
+#| label: step6
+
+step6 = cascade.step6_adherence_completion(df)
+ru.ru_table(
+    step6["adherence_summary"],
+    note="Доля принятых доз (от назначенных), медиана/МКИ",
+)
+ru.ru_table(
+    step6["dose_threshold"],
+    value_maps=ru.vmaps({"threshold": ru.THRESHOLD_RU}),
+    note="Достигнутые пороги доз",
+)
+display(ru.outcome_stacked_bar_ru(step6["outcome_distribution"]))  # общий
+
+step6_by_site = cascade.step6_adherence_completion(df, group_by=["Source"])
+display(ru.outcome_stacked_bar_ru(step6_by_site["outcome_distribution"], group_by=["Source"]))
+
+step6_by_group = cascade.step6_adherence_completion(df, group_by=["TargetGroup"])
+display(ru.outcome_stacked_bar_ru(step6_by_group["outcome_distribution"], group_by=["TargetGroup"]))
+```
+
+## Шаг 7 — Получение стимулирующих выплат
+
+Доля получивших каждую выплату среди имеющих на неё право, и медианная
+задержка между достижением показателя и датой выплаты; сравнение по
+площадкам.
+
+```{python}
+#| label: step7
+
+step7 = cascade.step7_incentive_uptake(df)
+ru.ru_table(
+    step7["uptake"],
+    value_maps=ru.vmaps({"incentive": ru.INCENTIVE_RU}),
+    note="Получение выплат (% от собственной когорты каждой выплаты)",
+)
+ru.ru_table(
+    step7["screening_payment_delay"],
+    note="Задержка выплаты за скрининг (дни), медиана/МКИ",
+)
+
+step7_by_site = cascade.step7_incentive_uptake(df, group_by=["Source"])
+ru.ru_table(
+    step7_by_site["uptake"],
+    value_maps=ru.vmaps({"incentive": ru.INCENTIVE_RU}),
+    note="Получение выплат по площадке",
+)
+```
+
+## Шаг 8 — Катамнез и итоговые исходы
+
+Повторный скрининг через 1 год/24 месяца; распределение итогового исхода
+в целом и по завершённости лечения; частота заболеваемости ТБ (на 100
+человеко-лет) среди начавших лечение ЛТИ.
+
+```{python}
+#| label: step8
+
+step8 = cascade.step8_followup_outcomes(df, as_of)
+ru.ru_table(step8["rescreened_1yr"], note="Повторный скрининг через 1 год (среди зрелой 1-годичной когорты)")
+ru.ru_table(step8["no_tb_after_1yr"], note="Нет ТБ через 1 год")
+ru.ru_table(step8["rescreened_24mo"], note="Повторный скрининг через 24 месяца (среди зрелой 24-месячной когорты)")
+ru.ru_table(step8["no_tb_after_24mo"], note="Нет ТБ через 24 месяца")
+ru.ru_table(
+    step8["final_outcome_distribution"],
+    value_maps=ru.vmaps({"category": ru.FINAL_OUTCOME_RU}),
+    note="Распределение итогового исхода",
+)
+ru.ru_table(
+    step8["final_outcome_by_completion"],
+    value_maps=ru.vmaps({"category": ru.FINAL_OUTCOME_RU}),
+    note="Итоговый исход, с разбивкой по завершённости превентивного лечения",
+)
+ru.ru_table(
+    step8["incidence_rate"],
+    note="Частота заболеваемости ТБ (на 100 человеко-лет, среди начавших лечение ЛТИ)",
+)
+```
+
+## Шаг 9 — Временные тренды
+
+Количество включений в когорту, начал лечения и исходов по календарным
+годам/кварталам (2018–2026).
+
+```{python}
+#| label: step9
+
+step9 = trends.step9_quarterly_trends(df)
+display(ru.trend_lines_ru(step9))
+```
+
+## Шаг 10 — Сравнение площадок
+
+Сопоставление (Владимир / Ковров / Муром) всех доль каскада из Шагов 2–8
+— только описательное выявление различий, не формальное статистическое
+сравнение между площадками.
+
+```{python}
+#| label: step10
+
+step10 = cascade.step10_site_comparison(df, as_of)
+ru.render_step10_ru(step10)
+```
+
+## Ограничения
+
+Согласно Описательному плану исследования §10: правоцензурирование
+(записи, включённые незадолго до даты анализа, ещё не могут показать
+зрелый исход); программные, нерандомизированные данные (различия между
+площадками/целевыми группами могут отражать особенности реализации
+программы, а не эффект лечения — причинно-следственные выводы не
+подразумеваются); структурные (а не связанные с качеством данных)
+пропуски для полей, применимых только к определённым целевым группам;
+полнота выявления исходов зависит от полноты катамнестического
+наблюдения, которая может различаться по площадкам.
