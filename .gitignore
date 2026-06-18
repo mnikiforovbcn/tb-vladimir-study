@@ -11,6 +11,13 @@ Data/processed/
 reports/*
 !reports/.gitkeep
 
+# Quarto render output left next to the .qmd source (cli.py moves the real
+# copy into reports/<run_date>/ above; this guards against a stray manual
+# `quarto render` in report/ getting committed again -- see the
+# report/descriptive_report.html history-rewrite incident).
+report/*.html
+report/*.md
+
 # Notebook checkpoints
 .ipynb_checkpoints/
 
