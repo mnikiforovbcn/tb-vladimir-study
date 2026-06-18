@@ -17,7 +17,7 @@ testable functions, per the Phase 2 plan in
 from __future__ import annotations
 
 import pandas as pd
-import pandera as pa
+import pandera.pandas as pa
 
 # --- Per-column value sets, straight from the data dictionary ---------------
 

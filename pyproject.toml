@@ -27,6 +27,7 @@ dev = [
     "ydata-profiling>=4.9",
     "jupyter>=1.0",
     "ipykernel>=6.29",
+    "papermill>=2.6",
 ]
 
 [build-system]

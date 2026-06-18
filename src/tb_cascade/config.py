@@ -16,3 +16,12 @@ RAW_DATA_DIR: Path = ROOT_DIR / "Data" / "raw"
 RAW_DATA_PATH: Path = RAW_DATA_DIR / "VladKovMur_dataset.csv"
 
 PROCESSED_DATA_DIR: Path = ROOT_DIR / "Data" / "processed"
+
+# Phase 7 (cli.py): output root for `python -m tb_cascade.cli run`, one
+# timestamped subfolder per run (`REPORTS_DIR / run_date`), per the
+# Implementation Plan's §3 repo-structure layout. The ad hoc Phase 2/4
+# runners (`scripts/run_qc.py`, `scripts/run_cascade.py`) predate this
+# constant and still hardcode `ROOT_DIR / "reports"` directly for their
+# own flat, non-timestamped output files -- left as-is since they are
+# explicitly not the Phase 7 CLI and out of this change's scope.
+REPORTS_DIR: Path = ROOT_DIR / "reports"
