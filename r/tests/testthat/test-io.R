@@ -24,7 +24,7 @@ test_that("load_raw() reads the real CSV with correct dtypes", {
 
 test_that("load_raw() reads the synthetic fixture with the right row/column count", {
   df <- suppressWarnings(load_raw(fixture_path))
-  expect_equal(nrow(df), 16L)
+  expect_equal(nrow(df), 17L)
   expect_equal(ncol(df), N_COLS_EXPECTED)
   expect_identical(names(df), tbcascade:::.EXPECTED_COLUMNS)
 })
