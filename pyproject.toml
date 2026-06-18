@@ -25,6 +25,8 @@ dev = [
     "black>=24.4",
     "pre-commit>=3.7",
     "ydata-profiling>=4.9",
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
 ]
 
 [build-system]

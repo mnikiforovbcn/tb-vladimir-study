@@ -1,0 +1,373 @@
+---
+title: "TB Preventive Treatment Cascade — Descriptive Report"
+subtitle: "Vladimir, Kovrov, and Murom (Vladimir Oblast, Russian Federation)"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+  gfm:
+    toc: true
+jupyter: tb-cascade
+execute:
+  echo: false
+  warning: false
+---
+
+<!--
+Phase 6 (Implementation Plan §Phase 6). Mirrors Descriptive Study
+Plan.md §7 (Steps 1-10) and §9 (visualization plan) section-for-section,
+and `scripts/run_cascade.py`'s data-loading logic, so this report stays
+auditable against both documents line by line.
+
+Item 2 ("wire report sections to cascade.py/trends.py/viz.py") is done:
+every Step section below calls the real Phase 4 (`cascade.py`/
+`trends.py`) and Phase 5 (`viz.py`) functions directly -- no numbers are
+hand-typed into this file. Where Phase 5 has a dedicated chart/table
+renderer (Steps 1, 2, 6, 9, 10) it is used; where it does not (Steps 3,
+4, 5, 7, 8) the step's table is shown as a markdown table via this
+file's own `show_table`/`show_tableone` helpers, the same convention
+`scripts/run_cascade.py` already uses for its markdown report.
+
+Item 4 (self-describing header) is also done: "Report metadata" prints
+the analysis date, the data snapshot's own last-modified date, the
+pipeline's git commit hash (`+dirty` if the working tree has
+uncommitted changes), and record count, then shows every Sec 6 QC
+rule's row counts in/out (`qc.run_qc(raw).summary` -- aggregate counts
+only, never the record-level `flagged` table).
+
+Parameters follow Quarto's Jupyter/Papermill convention: override at
+render time with, e.g.
+    quarto render report/descriptive_report.qmd -P as_of:2026-07-01
+-->
+
+```{python}
+#| label: parameters
+#| tags: [parameters]
+
+as_of: str = "2026-06-16"  # analysis date: Step 8 maturity + incidence-rate person-time
+analysis_ready_path: str = ""  # path to analysis_ready_<date>.parquet; "" = rebuild from raw
+window_months: int = 12  # right-censoring window (months) when rebuilding from raw
+```
+
+```{python}
+#| label: load-data
+#| include: false
+
+import pandas as pd
+from IPython.display import Markdown, display
+
+from tb_cascade import cascade, derive, trends, viz
+from tb_cascade.config import ROOT_DIR, RAW_DATA_PATH
+from tb_cascade.io import load_raw
+
+# `raw` is always loaded (a plain CSV read, cheap at this data scale)
+# even when `analysis_ready_path` is given, since the "report-header"
+# cell's QC row counts (Phase 6 item 4) run against the raw input per
+# `scripts/run_qc.py`'s own convention -- a persisted analysis-ready
+# Parquet has already been through `derive.build_analysis_table` and is
+# not what Sec 6's QC rules are meant to check.
+raw = load_raw()
+if analysis_ready_path:
+    df = pd.read_parquet(analysis_ready_path)
+else:
+    df = derive.build_analysis_table(raw, as_of, window_months=window_months)
+
+n_records = len(df)
+
+
+def show_table(df: pd.DataFrame, note: str | None = None) -> None:
+    """Render a DataFrame as a markdown table, optionally preceded by an
+    italic note -- renders consistently across both the html and gfm
+    render targets, mirroring `scripts/run_cascade.py`'s `_section`/
+    `_df_md` convention. Used for every step's table that has no
+    dedicated `viz.py` renderer (Steps 3, 4, 5, 7, 8)."""
+    if note:
+        display(Markdown(f"_{note}_"))
+    display(Markdown(df.to_markdown(index=False)))
+
+
+def show_tableone(table1) -> None:
+    """Render a `tableone.TableOne` via its own pretty-printed `__repr__`
+    inside a fixed-width code block, mirroring `scripts/run_cascade.py`'s
+    `_tableone_block` -- used only as a fallback if `viz.baseline_table`
+    is unavailable for some reason; Step 1 below uses `viz.baseline_table`
+    directly instead."""
+    display(Markdown("```\n" + str(table1) + "\n```"))
+```
+
+## Report metadata
+
+```{python}
+#| label: report-header
+
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from tb_cascade import qc
+
+
+def _git_commit_hash(root: Path) -> str:
+    """Short hash of the pipeline commit that produced this report, with
+    a `+dirty` suffix if the working tree has uncommitted changes -- so
+    a report is never silently attributed to a commit it doesn't
+    actually match. Falls back to "unknown" outside a git checkout
+    (e.g. git not installed, or a packaged release with no .git dir)."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root, capture_output=True, text=True, check=True,
+            ).stdout.strip()
+        )
+        return commit + ("+dirty" if dirty else "")
+    except Exception:
+        return "unknown"
+
+
+def _data_snapshot_date(path: Path) -> str:
+    """Last-modified date of the file this run actually loaded data
+    from -- the registry export's own snapshot date, not today's date,
+    since this report can be re-rendered later against the same data."""
+    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+    return f"{mtime:%Y-%m-%d} ({path.name})"
+
+
+# QC row counts in/out of each Sec 6 rule, run against the raw input
+# (see the load-data cell's note) -- `summary` only (rule/n_checked/
+# n_violations/violation_rate), never `flagged` (which carries Source/
+# Nomer linkage keys and is not safe for this report, per Sec 11).
+qc_summary = qc.run_qc(raw).summary
+
+snapshot_source = Path(analysis_ready_path) if analysis_ready_path else RAW_DATA_PATH
+
+print(f"Analysis date (as_of): {as_of}")
+print(f"Data snapshot: {_data_snapshot_date(snapshot_source)}")
+print(f"Pipeline commit: {_git_commit_hash(ROOT_DIR)}")
+print(f"Records (n): {n_records}")
+```
+
+```{python}
+#| label: report-header-qc
+
+show_table(
+    qc_summary,
+    note=(
+        "QC rule row counts (Descriptive Study Plan §6): `n_checked` is the "
+        "denominator the rule applied to (excludes not-applicable records), "
+        "`n_violations` is how many of those failed it. Run against the raw "
+        "input prior to any derived-variable transforms; see "
+        "`reports/qc_report.md` for the full per-site QC appendix."
+    ),
+)
+```
+
+All counts and percentages below have small cells (n < 5) suppressed per
+Descriptive Study Plan §11. No row-level identifiers (`Source_id`, `Nomer`,
+`IndexCase`) appear in this report — `Source` site-name labels appear only
+as an aggregate stratification dimension.
+
+## Step 1 — Population profile (Table 1)
+
+Frequencies/percentages of `Source`, `TargetGroup`, `Sex`, age band, and
+`RelationWithSource` (contacts), overall and by site; median/IQR for age
+and contacts screened per `IndexCase`.
+
+```{python}
+#| label: step1
+
+step1 = cascade.step1_baseline_table(df)
+step1_figs = viz.baseline_table(step1)
+display(step1_figs["table1"])
+display(step1_figs["age_summary"])
+display(step1_figs["contacts_per_index_case"])
+```
+
+## Step 2 — Screening cascade
+
+Proportion screened → suspected TB → Diaskintest positive → fully
+evaluated, for the full cohort and by `TargetGroup`/site.
+
+```{python}
+#| label: step2
+
+step2 = cascade.step2_screening_cascade(df)
+display(viz.funnel_chart(step2))  # overall — Study Plan §9 bullet 1
+
+step2_by_group = cascade.step2_screening_cascade(df, group_by=["TargetGroup"])
+display(viz.funnel_chart_by_group(step2_by_group, group_col="TargetGroup"))
+
+step2_by_site = cascade.step2_screening_cascade(df, group_by=["Source"])
+display(viz.funnel_chart_by_group(step2_by_site, group_col="Source"))
+```
+
+## Step 3 — Diagnostic outcomes
+
+Among those fully evaluated: proportion `ConfirmedDiagnosisTB`, `LTI`,
+`NoTBNoLTI`, `NoTBLTIunknown`; cross-tabulated by `TargetGroup` and site.
+
+```{python}
+#| label: step3
+
+step3 = cascade.step3_diagnostic_outcomes(df)
+show_table(step3)
+
+step3_by_group = cascade.step3_diagnostic_outcomes(df, group_by=["TargetGroup"])
+show_table(step3_by_group, note="By target group")
+
+step3_by_site = cascade.step3_diagnostic_outcomes(df, group_by=["Source"])
+show_table(step3_by_site, note="By site")
+```
+
+## Step 4 — LTI preventive treatment cascade
+
+Among those eligible: recommended → prescribed → started; initiation
+delay (days, median/IQR) and proportion initiated within 30/60 days.
+
+```{python}
+#| label: step4
+
+# step4["cascade"]'s stage labels ("recommended"/"prescribed"/"started")
+# don't match step2's _STEP2_STAGES, so viz.funnel_chart can't be reused
+# here (it validates the stage set) -- shown as a table instead.
+step4 = cascade.step4_lti_cascade(df)
+show_table(step4["cascade"], note="Cascade stages (% of those eligible for LTI treatment)")
+show_table(
+    step4["initiation_delay"],
+    note="Diagnosis-to-treatment-start delay (days), median/IQR",
+)
+show_table(step4["initiated_within_target"], note="Initiated within target window")
+```
+
+## Step 5 — Regimen description
+
+Among those started on treatment: bedaquiline-containing (`RegBq`) vs.
+moxifloxacin-containing (`RegMfx`) regimens, by site and by year of
+treatment start.
+
+```{python}
+#| label: step5
+
+step5 = cascade.step5_regimen_description(df)
+show_table(step5)
+
+step5_by_year = cascade.step5_regimen_description(df, group_by=["Source", "treat_start_year"])
+show_table(step5_by_year, note="By site and year of treatment start")
+```
+
+## Step 6 — Adherence and completion
+
+Distribution of dose ratio; proportion reaching 50%/100% dose thresholds;
+outcome composition (`TreatmentCompleted`/`TreatmentFinished`/non-completion
+categories) as a stacked bar summing to 100% of those started.
+
+```{python}
+#| label: step6
+
+step6 = cascade.step6_adherence_completion(df)
+show_table(step6["adherence_summary"], note="Adherence ratio (doses taken / scheduled), median/IQR")
+show_table(step6["dose_threshold"], note="Dose thresholds reached")
+display(viz.outcome_stacked_bar(step6["outcome_distribution"]))  # overall
+
+# Study Plan §9 bullet 2: stacked bar of outcome composition by site/target group
+step6_by_site = cascade.step6_adherence_completion(df, group_by=["Source"])
+display(viz.outcome_stacked_bar(step6_by_site["outcome_distribution"], group_by=["Source"]))
+
+step6_by_group = cascade.step6_adherence_completion(df, group_by=["TargetGroup"])
+display(viz.outcome_stacked_bar(step6_by_group["outcome_distribution"], group_by=["TargetGroup"]))
+```
+
+## Step 7 — Incentive payment uptake
+
+Proportion receiving each incentive among those eligible, and median delay
+between milestone and payment date; compared by site.
+
+```{python}
+#| label: step7
+
+step7 = cascade.step7_incentive_uptake(df)
+show_table(step7["uptake"], note="Uptake by incentive (% of each incentive's own eligible cohort)")
+show_table(
+    step7["screening_payment_delay"],
+    note="Screening payment delay (days), median/IQR",
+)
+
+step7_by_site = cascade.step7_incentive_uptake(df, group_by=["Source"])
+show_table(step7_by_site["uptake"], note="Uptake by incentive, by site")
+```
+
+## Step 8 — Follow-up and final outcomes
+
+Re-screening at 1 year/24 months; `FinalOutcome` distribution overall and
+by treatment completion; TB incidence rate (per 100 person-years) among
+LTI starters.
+
+```{python}
+#| label: step8
+
+step8 = cascade.step8_followup_outcomes(df, as_of)
+show_table(step8["rescreened_1yr"], note="Re-screened at 1 year (among the 1-year-mature cohort)")
+show_table(step8["no_tb_after_1yr"], note="No TB after 1 year")
+show_table(step8["rescreened_24mo"], note="Re-screened at 24 months (among the 24-month-mature cohort)")
+show_table(step8["no_tb_after_24mo"], note="No TB after 24 months")
+show_table(step8["final_outcome_distribution"], note="Final outcome distribution")
+show_table(
+    step8["final_outcome_by_completion"],
+    note="Final outcome, stratified by whether preventive treatment was completed",
+)
+show_table(
+    step8["incidence_rate"],
+    note="TB incidence rate (per 100 person-years, among LTI starters)",
+)
+```
+
+## Step 9 — Temporal trends
+
+Enrollment, treatment initiation, and outcome counts by calendar
+year/quarter (2018-2026).
+
+```{python}
+#| label: step9
+
+step9 = trends.step9_quarterly_trends(df)
+display(viz.trend_lines(step9))
+```
+
+## Step 10 — Site comparison
+
+Side-by-side summary (Vladimir / Kovrov / Murom) of all cascade
+proportions from Steps 2-8 — descriptive flagging only, not a formal
+between-site hypothesis test.
+
+```{python}
+#| label: step10
+
+step10 = cascade.step10_site_comparison(df, as_of)
+step10_figs = viz.site_comparison_table(step10)
+
+# step10_figs mirrors step10's own shape (plain Figure or nested dict of
+# Figures); display every leaf in the same order viz._STEP10_TITLES defines.
+for value in step10_figs.values():
+    if isinstance(value, dict):
+        for fig in value.values():
+            display(fig)
+    else:
+        display(value)
+```
+
+## Limitations
+
+Per Descriptive Study Plan §10: right-censoring (records enrolled close to
+the analysis date cannot yet show a mature outcome); programmatic,
+non-randomized data (site/target-group differences may reflect
+implementation rather than treatment effects — no causal inference is
+intended); structural (not data-quality) missingness for fields that only
+apply to certain target groups; outcome ascertainment depends on
+follow-up completeness, which may vary by site.
