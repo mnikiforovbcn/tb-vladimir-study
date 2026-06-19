@@ -125,7 +125,7 @@ table1 <- function(df, by = "Source") {
   labelled <- df |>
     dplyr::mutate(
       TargetGroup = factor(
-        .data$TargetGroup, levels = 1:4, labels = c("Contact", "Homeless", "PLHIV", "Other")
+        .data$TargetGroup, levels = seq_along(TARGET_GROUP_LABELS), labels = TARGET_GROUP_LABELS
       ),
       Sex = factor(.data$Sex, levels = 1:2, labels = c("Male", "Female")),
       RelationWithSource = factor(

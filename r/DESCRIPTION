@@ -30,9 +30,11 @@ Imports:
     ggplot2,
     plotly,
     htmlwidgets,
+    scales,
     rprojroot,
     glue,
     knitr,
+    rmarkdown,
     utils
 Suggests:
     testthat (>= 3.0.0),

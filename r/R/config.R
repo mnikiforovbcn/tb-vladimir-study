@@ -70,3 +70,10 @@ DATE_ORDER_SEQUENCE <- c(
   "DateTreatmentScheme",
   "DateOutcome"
 )
+
+#' Display labels for the coded `TargetGroup` variable, in code order 1-4
+#'
+#' Shared by [table1()] and every `viz.R` chart that facets or colors by
+#' `TargetGroup`, so the recoding only needs to be defined once.
+#' @export
+TARGET_GROUP_LABELS <- c("Contact", "Homeless", "PLHIV", "Other")
