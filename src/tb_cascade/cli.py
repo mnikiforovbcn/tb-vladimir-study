@@ -9,6 +9,8 @@ writes one self-contained, timestamped output folder per run:
     reports/<run_date>/
         qc_report.md            # technical QC appendix (Sec 12.3) -- read this first
         flagged_records.csv     # row-level QC detail -- LOCAL REVIEW ONLY, see below
+        data_cleaning/           # Phase 8: Владимир.xlsx / Ковров.xlsx / Муром.xlsx --
+                                  # per-site correction lists, LOCAL REVIEW ONLY, see below
         descriptive_report.html # Phase 6 report, English
         descriptive_report.md   # ... gfm copy, for flat-file circulation
         descriptive_report_ru.html / .md   # Russian translation, if its
@@ -34,6 +36,12 @@ machine -- only `qc_report.md` and the rendered report(s) are written
 to be shareable. See Descriptive Study Plan Sec 11 and Implementation
 Plan Sec 7.
 
+`data_cleaning/`'s per-site workbooks (Phase 8, `cleaning_list.py`) carry
+the same kind of record-level detail (`Nomer`) for the same reason
+(see that module's docstring) -- they exist to be handed to each site's
+own data manager directly, never bundled with the descriptive report or
+copied off this machine.
+
 Rendering is delegated to the real `quarto` CLI via `subprocess` (Quarto
 is not a Python import-able dependency). Quarto writes a single
 document's HTML/gfm output next to its `.qmd` source by default; this
@@ -56,7 +64,7 @@ from pathlib import Path
 
 import click
 
-from tb_cascade import derive, qc, schema
+from tb_cascade import cleaning_list, derive, qc, schema
 from tb_cascade.config import REPORTS_DIR, ROOT_DIR
 from tb_cascade.io import load_raw
 
@@ -116,12 +124,19 @@ def cli() -> None:
     "Quarto render step entirely (e.g. for a fast QC-only check, or on a "
     "machine without Quarto installed).",
 )
+@click.option(
+    "--skip-cleaning-list",
+    is_flag=True,
+    help="Skip writing the per-site data-cleaning workbooks "
+    "(reports/<run_date>/data_cleaning/, Phase 8), for symmetry with --skip-report.",
+)
 def run(
     as_of: str | None,
     run_date: str | None,
     window_months: int,
     langs: tuple[str, ...],
     skip_report: bool,
+    skip_cleaning_list: bool,
 ) -> None:
     """Run the full pipeline (Phases 1-6) and write reports/<run_date>/."""
     as_of = as_of or date.today().isoformat()
@@ -132,7 +147,7 @@ def run(
     click.echo(f"Run date: {run_date} | Analysis date (as_of): {as_of} | Output: {out_dir}")
 
     # --- Phase 1: ingestion ---------------------------------------------
-    click.echo("\n[1/4] Loading raw data...")
+    click.echo("\n[1/5] Loading raw data...")
     raw = load_raw()
     click.echo(f"  {len(raw)} rows x {len(raw.columns)} columns")
 
@@ -141,7 +156,7 @@ def run(
     # continue rather than abort the run -- since a schema violation does
     # not by itself mean every downstream table is wrong; the QC report
     # below surfaces the same issues with row-level detail anyway).
-    click.echo("\n[2/4] Validating schema...")
+    click.echo("\n[2/5] Validating schema...")
     try:
         schema.validate(raw)
         click.echo("  schema OK -- no violations")
@@ -182,8 +197,24 @@ def run(
     else:
         click.echo("  No flagged records.")
 
+    # --- Phase 8: per-site data-cleaning workbooks ------------------------
+    # Reuses `qc_result` (no rules recomputed) -- only repackages it into a
+    # Russian-language, per-site, per-problem format the local data managers
+    # already know (Excel) instead of another Markdown/CSV report. See
+    # `cleaning_list.py`'s docstring for why this is the one record-level,
+    # `Nomer`-carrying output this module writes other than `flagged_records.csv`.
+    click.echo("\n[3/5] Writing per-site data-cleaning workbooks...")
+    if skip_cleaning_list:
+        click.echo("  --skip-cleaning-list set: not writing any workbook.")
+    else:
+        cleaning_paths = cleaning_list.export_cleaning_list(
+            raw, out_dir / "data_cleaning", qc_result=qc_result
+        )
+        for site_name_ru, path in sorted(cleaning_paths.items()):
+            click.echo(f"  {site_name_ru}: {path}")
+
     # --- Phase 3: derived variables --------------------------------------
-    click.echo(f"\n[3/4] Building analysis-ready table (window_months={window_months})...")
+    click.echo(f"\n[4/5] Building analysis-ready table (window_months={window_months})...")
     analysis_df = derive.build_analysis_table(raw, as_of, window_months=window_months)
     n_derived = len(analysis_df.columns) - len(raw.columns)
     click.echo(
@@ -199,13 +230,13 @@ def run(
     # Implementation Plan Phase 6 item 2 -- so this command's own job is
     # just to invoke Quarto with the right parameters and relocate output.)
     if skip_report:
-        click.echo("\n[4/4] --skip-report set: not rendering any report.")
+        click.echo("\n[5/5] --skip-report set: not rendering any report.")
         return
 
     selected_langs = langs or tuple(
         lang for lang, template in REPORT_TEMPLATES.items() if template.exists()
     )
-    click.echo(f"\n[4/4] Rendering report(s): {', '.join(selected_langs) or '(none found)'}")
+    click.echo(f"\n[5/5] Rendering report(s): {', '.join(selected_langs) or '(none found)'}")
     for lang in selected_langs:
         template = REPORT_TEMPLATES[lang]
         if not template.exists():

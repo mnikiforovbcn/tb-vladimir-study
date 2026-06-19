@@ -27,6 +27,7 @@ Design goals, in priority order:
 | Baseline table ("Table 1") | `tableone` | Purpose-built package for the demographic summary table in Step 1. |
 | Visualization | `plotly` (primary), `matplotlib`/`seaborn` (static fallback) | Plotly has a built-in `Funnel` chart type for the cascade visualization and produces interactive HTML; matplotlib for print-ready PNGs embedded in Word/PDF output. |
 | Report assembly | `Quarto` | Single source (`.qmd`) renders to HTML, PDF, and Markdown; supports parameterized, repeatable report generation. If avoiding a non-Python CLI dependency is a priority, substitute Jupyter + `papermill` + `nbconvert`. |
+| Spreadsheet export | `openpyxl` (via `pandas.to_excel`) | Phase 8's per-site data-cleaning list needs a sortable/filterable format the local data managers already know (Excel), not another Markdown/CSV report. |
 | Testing | `pytest` | Unit tests for every QC rule and derived-variable function. |
 | Code quality | `ruff` (lint) + `black` (format) + `pre-commit` | Automated, low-effort consistency. |
 | Version control | Git | Track code, configs, and report templates (not the raw data export, unless governance allows it — see §8). |
@@ -60,12 +61,14 @@ TBPoject/
 │       ├── cascade.py           # Steps 1-8, 10: counts, percentages, CIs, stratification
 │       ├── trends.py            # Step 9: temporal aggregation
 │       ├── viz.py               # all chart-producing functions (return Plotly/matplotlib figure objects)
+│       ├── cleaning_list.py     # Phase 8: per-site, per-problem patient correction list (Russian)
 │       └── cli.py               # `python -m tb_cascade.cli run` entry point
 ├── notebooks/
 │   └── exploration.ipynb        # throwaway exploration only; nothing in notebooks is a dependency of the pipeline
 ├── tests/
 │   ├── test_qc.py
 │   ├── test_derive.py
+│   ├── test_cleaning_list.py
 │   └── fixtures/synthetic_rows.csv   # small hand-built rows covering edge cases (missing dates, reversed dates, duplicate Nomer)
 ├── report/
 │   └── descriptive_report.qmd   # parameterized report matching Descriptive Study Plan.md §7 and §9
@@ -73,6 +76,7 @@ TBPoject/
 │   └── 2026-06-16/
 │       ├── descriptive_report.html
 │       ├── qc_report.md
+│       ├── data_cleaning/       # Phase 8: Владимир.xlsx / Ковров.xlsx / Муром.xlsx — carries Nomer, site-restricted distribution only
 │       ├── figures/*.png
 │       └── tables/*.csv
 ├── pyproject.toml
@@ -144,7 +148,17 @@ TBPoject/
 2. `Makefile` targets: `make setup` (install deps + pre-commit), `make test` (pytest), `make report` (run the CLI), `make clean` (clear `reports/` and processed Parquet). — Done: top-level `Makefile` with `setup`/`test`/`report`/`clean`, each a thin wrapper around the equivalent `uv run ...` command (no duplicated logic). On the user's Windows machine `make` itself was not available by default (and even once installed, its `rm`/`touch` calls need a Unix-style shell), so it's documented as an optional convenience; the README leads with the underlying `uv run` commands directly, confirmed working there.
 3. README documents the one-command run path and how to interpret `qc_report.md` before trusting `descriptive_report.html`. — Done: README's "Running the full pipeline" section documents the command, its flags, and the per-run output table; a "Read `qc_report.md` before trusting `descriptive_report.html`" subsection explains the QC report's three sections (internal consistency rules, date-order detail, missingness audit) and why it's meant to be read first.
 
-### Phase 8 — Validation and sign-off
+### Phase 8 — Data cleaning list (`cleaning_list.py`)
+1. Reuse `qc.run_qc(df)`'s record-level flagged table (`Source`+`Nomer` per rule, Phase 2.3) as the single source of truth — this phase only repackages existing QC findings into an actionable format; it does not re-implement or duplicate any rule logic.
+2. Define a `RULE_FIELDS` mapping from each `qc.CHECKS` rule to the specific field(s) it implicates, read directly off each `check_*` function's own columns rather than re-derived by hand: `duplicate_registration` → `Source`, `Nomer`; `treatgroup_onehot` → `TreatGroup`, `TreatGroup_01/02/03`; `outcome_mutual_exclusivity` → the 7 outcome flags in `check_outcome_mutual_exclusivity`'s `outcome_cols`; `doses_taken_le_schema` → `DosesTaken`, `SchemaDoses`; `dose_threshold_consistency` → `Take50pc`, `Take100pc`, `DosesTaken`, `SchemaDoses`; `diagnosis_mutual_exclusivity` → the 4 columns in `check_diagnosis_mutual_exclusivity`'s `diagnosis_cols`; `age_range` → `BirthDate`, `DateScreening`. Two rules need a small new record-level helper rather than a static mapping, since today's code only exposes an aggregate breakdown: `date_order` (only `date_order_pair_breakdown`'s per-pair *counts* exist; this phase needs, per flagged record, *which* adjacent pair reversed) and `dose_threshold_consistency` (3 sub-checks can each fire independently; the field list should narrow to the sub-check(s) that actually fired, not always list all 4 columns).
+3. Russian labels: reuse `report/i18n_ru.py`'s existing `QC_RULE_LABELS_RU` (already covers all 8 `qc.py` rules) and `SITE_LABELS_RU` (already covers all 3 sites) directly — do not maintain a second glossary. Add only what's missing: a `FIELD_LABELS_RU` dict for the raw column names from step 2 that aren't already in `i18n_ru.COLUMN_LABELS_RU` (which covers derived/cascade-table columns, not raw fields like `DosesTaken`, `BirthDate`, `Take50pc`, the outcome/diagnosis flags, etc.).
+4. `build_cleaning_list(df, qc_result) -> pd.DataFrame`: one row per (record, violated rule) — columns `Площадка` (Russian site name), `Регистрационный номер` (`Nomer`), `Проблема` (Russian rule label), `Поле(я)` (Russian field label(s), comma-joined). A record violating multiple rules gets one row per rule, not one collapsed row, so every row is a single, actionable cause.
+5. `export_cleaning_list(df, out_dir)`: one `.xlsx` workbook per site (file name = the site's Russian name, e.g. `Владимир.xlsx`/`Ковров.xlsx`/`Муром.xlsx`, via `SITE_LABELS_RU`), each a single sheet sorted by `Проблема` then `Регистрационный номер`, frozen header row, autofilter enabled — a data manager filters to one problem type and works straight down the `Nomer` list against their local records, no code or rest-of-pipeline access needed. Requires adding `openpyxl` to `pyproject.toml` (§2) — not currently a dependency.
+6. Privacy (see also §7): unlike every other pipeline output, this list is *deliberately* record-level and carries `Nomer` — an explicit, documented exception to §7's "linkage keys never appear in any rendered report" rule, justified because the recipient is the local data manager who already holds the underlying patient records. Write it only to `reports/<run_date>/data_cleaning/` (already covered by the existing `reports/*` `.gitignore` rule) — never to `report/` or any other tracked path — and hand it directly to each site's own data manager rather than bundling it with the descriptive report.
+7. Wire into `cli.py`: `run` writes the cleaning list alongside the descriptive report by default; add `--skip-cleaning-list` for symmetry with the existing `--skip-report`.
+8. Unit tests in `tests/test_cleaning_list.py` against the synthetic fixture: every `qc.CHECKS` rule has a `RULE_FIELDS` entry (a parametrized test over `qc.CHECKS` itself, so a new rule added to `qc.py` later fails this test until its mapping is added here too); every rule/field actually triggered resolves to a Russian label with none falling back to its raw English name; a multi-rule-violation record produces one row per rule; per-site row counts reconcile exactly to `qc.run_qc_by_site`'s own per-site violation counts.
+
+### Phase 9 — Validation and sign-off
 1. Manually spot-check a random sample (~20 records) of automated cascade-step flags against the raw CSV by hand, with an epidemiologist reviewer, before accepting Phase 4 output.
 2. Confirm every QC rule in `qc_report.md` either passes or has a documented, accepted explanation (e.g., expected structural missingness).
 3. Tag the repository (`git tag v1.0-descriptive`) once the rendered report is approved, so the exact code+data combination behind the approved report is reproducible later.
@@ -155,7 +169,8 @@ TBPoject/
 |---|---|---|
 | Unit tests | `pytest` | Every QC rule (Phase 2) and derived variable (Phase 3) against the synthetic fixture, including edge cases (nulls, boundary dates, zero `SchemaDoses`) |
 | Regression test | `pytest` | Row/column counts on the real raw CSV; alerts if the upstream export format changes |
-| Validation (manual) | n/a | Spot-check sample against raw CSV (Phase 8) |
+| Cleaning-list review (manual) | n/a | Confirm every `qc.CHECKS` rule has a `RULE_FIELDS` entry, Russian labels resolve correctly, per-site counts reconcile to `run_qc_by_site` (Phase 8) |
+| Validation (manual) | n/a | Spot-check sample against raw CSV (Phase 9) |
 | Report smoke test | `quarto render --execute` in CI or pre-commit | Confirms the report builds end-to-end without runtime errors before merge |
 
 ## 6. Data versioning and reproducibility
@@ -167,6 +182,7 @@ TBPoject/
 ## 7. Privacy and output controls
 
 - `Source_id`, `Nomer`, and `IndexCase` are linkage keys, not names/addresses, but should still never appear in any rendered report — only aggregate counts/percentages leave the pipeline (enforced by `suppress_small_cells` in Phase 4.7).
+- **Exception — Phase 8's data-cleaning list.** This one output is deliberately record-level and carries `Nomer`: its entire purpose is letting a local data manager find and correct a specific patient's record. It is written only to the gitignored `reports/<run_date>/data_cleaning/` path, one workbook per site, and is meant for direct, site-restricted distribution to that site's own data manager — never folded into the descriptive report, never committed, never sent to a site other than the one it identifies.
 - Keep `Data/raw/` and `Data/processed/` out of git (`.gitignore`); only code, configs, and the report template are version-controlled. If the raw CSV needs to travel with the repo for reproducibility, store it in a private, access-controlled location rather than a public remote.
 
 ## 8. Effort estimate
@@ -181,5 +197,6 @@ TBPoject/
 | 5 — Visualization | 1.5 days |
 | 6 — Report assembly | 1.5 days |
 | 7 — Automation/CLI | 0.5 day |
-| 8 — Validation/sign-off | 1 day (depends on epidemiologist availability) |
-| **Total** | **~10.5 working days** for one engineer, before iteration on review feedback |
+| 8 — Data cleaning list | 1 day |
+| 9 — Validation/sign-off | 1 day (depends on epidemiologist availability) |
+| **Total** | **~11.5 working days** for one engineer, before iteration on review feedback |

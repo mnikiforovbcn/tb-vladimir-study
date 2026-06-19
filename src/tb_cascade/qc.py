@@ -416,7 +416,7 @@ StructuralRule = Callable[[pd.DataFrame], pd.Series]
 #: populated, so any null in it is "unexplained" by default.
 #:
 #: These are deliberately simple, single-upstream-flag heuristics meant
-#: to triage the bulk of expected missingness for Phase 2; Phase 8
+#: to triage the bulk of expected missingness for Phase 2; Phase 9
 #: (manual epidemiologist sign-off) is where they get reviewed,
 #: confirmed, or refined -- "unexplained" means "no documented
 #: structural reason yet", not "confirmed data-entry error".

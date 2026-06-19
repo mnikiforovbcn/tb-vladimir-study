@@ -33,7 +33,7 @@ uv run python -m tb_cascade.cli run --as-of 2026-06-16
 
 This is the one-command path through Phases 1-6 (ingestion -> schema/QC -> derived variables -> cascade/trend analytics -> visualization -> report rendering), implemented by `src/tb_cascade/cli.py`. `--as-of` defaults to today and is the analysis date used for follow-up maturity, incidence-rate person-time, and the censoring window.
 
-Other flags: `--run-date` (tag the output folder/Parquet independently of `--as-of`, e.g. when re-running against the same analysis date), `--window-months` (default 12), `--lang en`/`--lang ru` (repeatable; defaults to every report template found under `report/`), `--skip-report` (run ingestion/QC/derive only, no Quarto render -- useful for a fast QC-only check or on a machine without Quarto installed).
+Other flags: `--run-date` (tag the output folder/Parquet independently of `--as-of`, e.g. when re-running against the same analysis date), `--window-months` (default 12), `--lang en`/`--lang ru` (repeatable; defaults to every report template found under `report/`), `--skip-report` (run ingestion/QC/derive only, no Quarto render -- useful for a fast QC-only check or on a machine without Quarto installed), `--skip-cleaning-list` (skip writing the per-site data-cleaning workbooks, for symmetry with `--skip-report`).
 
 Report rendering passes `-P key:value` parameters to `quarto render`, which requires the `papermill` package (installed via `uv sync --extra dev`, see Setup). Without it, the render step fails with `ERROR: The papermill package is required for processing --execute-params`; either re-run `uv sync --extra dev` to pick it up, or pass `--skip-report` to skip rendering entirely.
 
@@ -43,10 +43,11 @@ Each run writes a single self-contained folder, `reports/<run_date>/`:
 |---|---|---|
 | `qc_report.md` | Technical QC appendix: rule violation rates by site, date-order reversal detail, missingness audit | Yes |
 | `flagged_records.csv` | Every QC-flagged row, full data, joined back from the raw export | **No -- local review only, see below** |
+| `data_cleaning/Владимир.xlsx`, `Ковров.xlsx`, `Муром.xlsx` | Phase 8: per-site, Russian-language correction list (registration number, problem, field(s)) for that site's data manager | **No -- local review only, see below** |
 | `descriptive_report.html` / `.md` | Phase 6 report (English) | Yes |
 | `descriptive_report_ru.html` / `.md` | Russian translation, if `report/descriptive_report_ru.qmd` is present | Yes |
 
-`reports/` is git-ignored, so none of this reaches version control on its own -- but "not in git" is not the same thing as "safe to share." `flagged_records.csv` carries row-level identifiers (`Source`, `Nomer`) and must never be forwarded, emailed, or copied off this machine. Only `qc_report.md` and the rendered report(s) are written to be circulated.
+`reports/` is git-ignored, so none of this reaches version control on its own -- but "not in git" is not the same thing as "safe to share." `flagged_records.csv` and the `data_cleaning/` workbooks carry row-level identifiers (`Source`/`Nomer`) and must never be forwarded, emailed, or copied off this machine. Only `qc_report.md` and the rendered report(s) are written to be circulated.
 
 ### Read `qc_report.md` before trusting `descriptive_report.html`
 
@@ -80,4 +81,4 @@ New-Item reports\.gitkeep -ItemType File -Force | Out-Null
 
 ## Status
 
-Phases 0-7 of `Analytical Framework Implementation Plan.md` are complete: ingestion (`io.py`), schema/QC (`schema.py`, `qc.py`), derived variables (`derive.py`), cascade/trend analytics (`cascade.py`, `trends.py`), visualization (`viz.py`), report assembly (`report/descriptive_report*.qmd`), and the `cli.py`/`Makefile` automation in this document. Phase 8 (manual validation and sign-off) is the only remaining item in the Implementation Plan.
+Phases 0-8 of `Analytical Framework Implementation Plan.md` are complete: ingestion (`io.py`), schema/QC (`schema.py`, `qc.py`), derived variables (`derive.py`), cascade/trend analytics (`cascade.py`, `trends.py`), visualization (`viz.py`), report assembly (`report/descriptive_report*.qmd`), the `cli.py`/`Makefile` automation in this document, and the per-site, Russian-language data-cleaning list for local data managers (`cleaning_list.py`, wired into `cli.py`'s run command, tested in `tests/test_cleaning_list.py`). One item remains: Phase 9 (manual validation and sign-off).

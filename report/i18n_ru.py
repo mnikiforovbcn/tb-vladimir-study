@@ -55,6 +55,7 @@ import plotly.graph_objects as go
 from IPython.display import Markdown, display
 from plotly.subplots import make_subplots
 
+from i18n_labels import QC_RULE_LABELS_RU, SITE_LABELS_RU
 from tb_cascade import viz
 from tb_cascade.cascade import SMALL_CELL_THRESHOLD, _LABEL_MAPS, _STEP2_STAGES
 
@@ -172,28 +173,14 @@ INCENTIVE_RU: dict[str, str] = {
     "one_year": "1 год наблюдения",
 }
 
-#: `qc.CHECKS` rule names (the `rule` column of `qc.run_qc(...).summary`).
-QC_RULE_LABELS_RU: dict[str, str] = {
-    "duplicate_registration": "Дублирующаяся регистрация",
-    "treatgroup_onehot": "Согласованность TreatGroup (one-hot)",
-    "outcome_mutual_exclusivity": "Взаимоисключаемость исходов лечения",
-    "date_order": "Порядок дат",
-    "doses_taken_le_schema": "DosesTaken ≤ SchemaDoses",
-    "dose_threshold_consistency": "Согласованность порогов доз",
-    "diagnosis_mutual_exclusivity": "Взаимоисключаемость диагнозов",
-    "age_range": "Диапазон возраста",
-}
-
-#: `Source` values -- already readable site-name strings on the
-#: analysis-ready table (never a numeric code), translated to the sites'
-#: own Russian city names. Keys match `viz._SITE_COLORS` exactly, so
-#: chart functions below can look up the fixed English-keyed color and the
-#: Russian display text from the same site value.
-SITE_LABELS_RU: dict[str, str] = {
-    "Vladimir": "Владимир",
-    "Murom": "Муром",
-    "Kovrov": "Ковров",
-}
+#: `QC_RULE_LABELS_RU` (`qc.CHECKS` rule names) and `SITE_LABELS_RU`
+#: (`Source` values -> Russian city names, keys matching `viz._SITE_COLORS`
+#: exactly) now live in `i18n_labels.py` -- a dependency-free module also
+#: imported by `tb_cascade.cleaning_list` (Phase 8), which cannot afford
+#: this module's `IPython`/`plotly`/`viz`/`cascade` imports. Imported
+#: above; re-exported here under the same names so every existing
+#: reference in this file (and `ru.QC_RULE_LABELS_RU`/`ru.SITE_LABELS_RU`
+#: from the `.qmd` templates) keeps working unchanged.
 
 #: `TargetGroup` values, already recoded from numeric codes to English
 #: strings by `cascade._apply_label_maps` before this report ever sees them.
