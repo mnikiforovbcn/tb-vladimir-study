@@ -8,3 +8,7 @@ renv/python/
 renv/sandbox/
 reports/*
 !reports/.gitkeep
+report/*.html
+report/*.md
+report/*.knit.md
+report/*_files/

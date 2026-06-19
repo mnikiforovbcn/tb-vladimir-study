@@ -1,0 +1,257 @@
+---
+title: "TB Preventive Treatment Cascade: Descriptive Analysis"
+subtitle: "Contacts, Homeless Persons, and People Living with HIV — Vladimir, Kovrov, and Murom"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    code-fold: true
+  gfm:
+    output-file: descriptive_report.md
+execute:
+  echo: false
+  warning: false
+params:
+  run_date: !expr as.character(Sys.Date())
+  analysis_ready_path: ""
+---
+
+```{r}
+#| label: setup
+devtools::load_all(rprojroot::find_root(rprojroot::is_r_package, path = getwd()), quiet = TRUE)
+
+run_date <- as.Date(params$run_date)
+kable_pct <- function(df, ...) knitr::kable(df, digits = 3, ...)
+
+git_hash <- tryCatch(
+  system2("git", c("-C", repo_root(), "rev-parse", "--short", "HEAD"), stdout = TRUE),
+  error = function(e) NA_character_
+)
+
+using_snapshot <- nzchar(params$analysis_ready_path)
+if (using_snapshot) {
+  tab <- arrow::read_parquet(params$analysis_ready_path)
+  n_raw <- NA_integer_
+  qc_result <- NULL
+} else {
+  raw <- suppressWarnings(load_raw())
+  n_raw <- nrow(raw)
+  qc_result <- run_qc(raw)
+  tab <- build_analysis_table(raw, analysis_date = run_date)
+}
+n_analysis <- nrow(tab)
+n_censored <- sum(tab$censored)
+```
+
+## Report metadata
+
+| | |
+|---|---|
+| Snapshot / analysis date | `r format(run_date, "%Y-%m-%d")` |
+| Git commit | `r ifelse(is.na(git_hash), "unavailable", git_hash)` |
+| Input | `r if (using_snapshot) params$analysis_ready_path else raw_data_path()` |
+| Rows ingested | `r if (using_snapshot) "n/a (pre-built snapshot)" else n_raw` |
+| Rows in analysis table | `r n_analysis` |
+| Rows right-censored (< `r CENSORING_WINDOW_MONTHS` months of follow-up; excluded from Steps 4/6/8 outcome-maturity analyses) | `r n_censored` |
+
+```{r}
+#| label: qc-skip-note
+#| eval: !expr using_snapshot
+#| results: asis
+cat(
+  "_This report ran against a pre-built analysis-ready snapshot, which has already passed",
+  "the Section 6 QC checks below at build time. Re-render with `analysis_ready_path` unset to",
+  "regenerate the QC section directly against the raw CSV._"
+)
+```
+
+## Section 6 — Data management and quality control
+
+```{r}
+#| label: qc-tables
+#| eval: !expr isFALSE(using_snapshot)
+kable_pct(qc_result$schema_summary)
+kable_pct(qc_result$check_summary)
+kable_pct(qc_result$date_order_pairs)
+kable_pct(qc_result$missingness$by_column)
+```
+
+No record is dropped from the analysis table as a result of these checks: flagged rows are
+retained and surfaced here for transparency, per Section 6's "distinguish structural missingness
+from data-entry gaps" guidance. The full per-site missingness and flagged-row detail can be
+regenerated at any time via `render_qc_report(run_qc(load_raw()), path)`.
+
+## Step 1 — Population profile (Table 1)
+
+```{r}
+#| label: step1-table1
+render_table1(table1(tab, by = "Source"))
+```
+
+```{r}
+#| label: step1-contacts
+kable_pct(contacts_per_index_case(tab))
+```
+
+## Step 2 — Screening cascade
+
+```{r}
+#| label: step2-overall
+funnel_chart(screening_cascade(tab))
+```
+
+```{r}
+#| label: step2-by-target-group
+funnel_chart(screening_cascade(tab, "TargetGroup"), facet_var = "TargetGroup")
+```
+
+```{r}
+#| label: step2-by-site
+funnel_chart(screening_cascade(tab, "Source"), facet_var = "Source")
+```
+
+## Step 3 — Diagnostic outcomes
+
+```{r}
+#| label: step3-overall
+funnel_chart(diagnostic_outcomes(tab))
+```
+
+```{r}
+#| label: step3-by-target-group
+funnel_chart(diagnostic_outcomes(tab, "TargetGroup"), facet_var = "TargetGroup")
+```
+
+```{r}
+#| label: step3-by-site
+funnel_chart(diagnostic_outcomes(tab, "Source"), facet_var = "Source")
+```
+
+## Step 4 — LTI preventive treatment cascade
+
+```{r}
+#| label: step4-cascade
+funnel_chart(lti_treatment_cascade(tab))
+```
+
+```{r}
+#| label: step4-delay
+delay <- initiation_delay_summary(tab)
+kable_pct(delay$delay)
+kable_pct(delay$within_target)
+```
+
+## Step 5 — Regimen description
+
+```{r}
+#| label: step5-overall
+funnel_chart(regimen_composition(tab))
+```
+
+```{r}
+#| label: step5-by-site
+funnel_chart(regimen_composition(tab, "Source"), facet_var = "Source")
+```
+
+```{r}
+#| label: step5-by-year
+funnel_chart(regimen_by_year(tab), facet_var = "year")
+```
+
+## Step 6 — Adherence and completion
+
+```{r}
+#| label: step6-dose-uptake
+funnel_chart(dose_threshold_uptake(tab))
+```
+
+```{r}
+#| label: step6-adherence
+kable_pct(adherence_summary(tab))
+```
+
+```{r}
+#| label: step6-outcome-by-site
+outcome_stacked_bar(outcome_breakdown(tab, "Source"), "outcome_branch", "Source")
+```
+
+```{r}
+#| label: step6-outcome-by-target-group
+outcome_stacked_bar(outcome_breakdown(tab, "TargetGroup"), "outcome_branch", "TargetGroup")
+```
+
+## Step 7 — Incentive payment uptake
+
+```{r}
+#| label: step7-overall
+funnel_chart(incentive_uptake(tab))
+```
+
+```{r}
+#| label: step7-by-site
+funnel_chart(incentive_uptake(tab, "Source"), facet_var = "Source")
+```
+
+```{r}
+#| label: step7-delay
+kable_pct(dplyr::select(
+  incentive_uptake(tab), "milestone", "median_delay_days", "delay_iqr_low", "delay_iqr_high"
+))
+```
+
+## Step 8 — Follow-up and final outcomes
+
+```{r}
+#| label: step8-followup
+funnel_chart(followup_outcomes(tab))
+```
+
+```{r}
+#| label: step8-outcome-by-site
+outcome_stacked_bar(final_outcome_distribution(tab, "Source"), "final_outcome_category", "Source")
+```
+
+```{r}
+#| label: step8-outcome-by-completion
+outcome_stacked_bar(
+  final_outcome_distribution(tab, by_completion = TRUE),
+  "final_outcome_category", "completed_or_finished"
+)
+```
+
+```{r}
+#| label: step8-incidence
+kable_pct(incidence_rate(tab))
+kable_pct(incidence_rate(tab, "Source"))
+```
+
+## Step 9 — Temporal trends
+
+```{r}
+#| label: step9-enrollment
+trend_line_chart(enrollment_trends(tab))
+```
+
+```{r}
+#| label: step9-by-site
+trend_line_chart(quarterly_counts(tab, "DateScreening", group_vars = "Source"), color_var = "Source")
+```
+
+## Step 10 — Site comparison
+
+```{r}
+#| label: step10-site-comparison
+site_comparison_table(site_comparison(tab))
+```
+
+## Limitations and disclosure control
+
+Right-censoring, programmatic (non-randomized) data, structurally missing fields for non-contact
+target groups, and site-dependent follow-up completeness all apply to every result above exactly
+as described in the Study Plan's Section 10 — see that document for the full discussion. Every
+stratified cell with a count below `r SMALL_CELL_THRESHOLD` is suppressed throughout this report
+per Section 11's disclosure-control requirement, either by omission (charts) or by an explicit
+`"<5"` marker (Step 10's table); [Table 1](#step-1-population-profile-table-1) is the one
+exception, footnoted rather than suppressed, since it summarises the full cohort rather than a
+cascade numerator/denominator pair.
