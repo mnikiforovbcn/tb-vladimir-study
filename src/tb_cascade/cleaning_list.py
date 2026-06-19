@@ -2,12 +2,15 @@
 
 Repackages `qc.run_qc(df)`'s record-level flagged table into a per-site,
 Russian-language list a local data manager can act on directly: for
-every QC rule violation, which patient (`Nomer`) and which field(s)
-caused it. This module does not re-implement or duplicate any `qc.py`
-rule logic -- `qc.CHECKS` stays the single source of truth for *whether*
-a record violates a rule; this module only answers *which field(s)* are
-implicated, for display, and only ever reads `qc.run_qc`'s output plus
-the raw `df` it was computed from.
+every QC rule violation, which patient (`Nomer`), which field(s) caused
+it, and -- via the `Поле 1`, `Поле 2`, ... columns -- what those
+field(s) currently contain, so the data manager sees the actual value
+to correct, not just its name. This module does not re-implement or
+duplicate any `qc.py` rule logic -- `qc.CHECKS` stays the single source
+of truth for *whether* a record violates a rule; this module only
+answers *which field(s)* are implicated and *what they currently hold*,
+for display, and only ever reads `qc.run_qc`'s output plus the raw `df`
+it was computed from.
 
 Two rules need a small per-record helper rather than a static
 `RULE_FIELDS` lookup, since `qc.py` only exposes an aggregate breakdown
@@ -42,6 +45,7 @@ import pandas as pd
 
 from tb_cascade import qc
 from tb_cascade.config import ROOT_DIR
+from tb_cascade.io import BOOLEAN_COLUMNS, DATE_COLUMNS
 
 
 def _load_i18n_labels() -> ModuleType:
@@ -180,31 +184,109 @@ def _fields_ru(fields: list[str]) -> str:
     return ", ".join(FIELD_LABELS_RU.get(col, col) for col in fields)
 
 
+#: Raw column names formatted specially by `_format_field_value` below,
+#: read directly off `io.py`'s own categorization rather than duplicated
+#: here, so a future dtype change to either list is picked up for free.
+_BOOLEAN_FIELDS = set(BOOLEAN_COLUMNS)
+_DATE_FIELDS = set(DATE_COLUMNS)
+
+
+def _format_field_value(column: str, value: object) -> object:
+    """Render one raw `df` cell for display in a `Поле N` column.
+
+    A local data manager works in Excel, not pandas, so the raw dtype a
+    value happens to be stored as is translated into something they can
+    read directly: `Source` is translated via `SITE_LABELS_RU` (matching
+    `Площадка`'s own translation, rather than showing the English site
+    name a second time); every `io.BOOLEAN_COLUMNS` flag becomes "Да"/
+    "Нет" (a bare 0/1 or True/False means nothing on its own in a
+    Russian-language sheet); every `io.DATE_COLUMNS` field is narrowed
+    from `datetime64[ns]` to a plain date (every `Date*` column in this
+    dataset is date-only -- the time-of-day component is always midnight
+    and would just be visual noise in Excel). Everything else (raw
+    codes, counts, `Nomer` itself) passes through unchanged. Missing
+    (`pd.isna`) becomes a blank cell in every case.
+    """
+    if pd.isna(value):
+        return ""
+    if column == "Source":
+        return SITE_LABELS_RU.get(value, value)
+    if column in _BOOLEAN_FIELDS:
+        return "Да" if bool(value) else "Нет"
+    if column in _DATE_FIELDS:
+        return value.date() if hasattr(value, "date") else value
+    return value
+
+
+def _build_row_lookup(df: pd.DataFrame) -> pd.DataFrame:
+    """`df` indexed by (`Source`, `Nomer`), one row per key, for O(1)
+    field-value lookups in `build_cleaning_list`.
+
+    `drop=False`: `duplicate_registration`'s own `RULE_FIELDS` entry is
+    `["Source", "Nomer"]` -- the two columns being set as the index here
+    -- so a lookup row must still expose them as ordinary columns too,
+    or `_values_for` raises `KeyError` looking up the very fields that
+    rule cares about.
+
+    A genuine `duplicate_registration` violation means more than one
+    `df` row shares a key; keeping only the first occurrence is a
+    pre-existing limitation of keying by (`Source`, `Nomer`) at all (see
+    this module's docstring -- `cli.py`'s `flagged_records.csv` join has
+    the same property), not one introduced by adding value columns.
+    """
+    first_occurrence = ~df.duplicated(subset=["Source", "Nomer"], keep="first")
+    return df.loc[first_occurrence].set_index(["Source", "Nomer"], drop=False)
+
+
+def _values_for(record: pd.Series | None, fields: list[str]) -> list[object]:
+    """Formatted values of `fields` from one `df` row -- the data behind
+    `Поле 1`, `Поле 2`, ... in the same order as `_fields_ru(fields)`'s
+    labels. `record` is `None` only if the (`Source`, `Nomer`) key isn't
+    in `_build_row_lookup`'s result, which should not happen in practice
+    since every flagged record came from this same `df` -- defensive
+    only, so a lookup gap shows blank cells rather than raising.
+    """
+    if record is None:
+        return ["" for _ in fields]
+    return [_format_field_value(field, record[field]) for field in fields]
+
+
 def build_cleaning_list(df: pd.DataFrame, qc_result: qc.QCResult) -> pd.DataFrame:
     """One row per (record, violated rule), ready for Russian display.
 
     Columns: ``Площадка`` (Russian site name), ``Регистрационный номер``
     (`Nomer`), ``Проблема`` (Russian rule label), ``Поле(я)`` (Russian
-    field label(s), comma-joined). A record violating multiple rules
-    gets one row per rule, not one collapsed row, so every row is a
-    single, actionable cause. Sorted by site, then rule, then `Nomer` --
-    `export_cleaning_list` slices this by site, so each site's sheet
-    comes out already sorted by ``Проблема`` then ``Регистрационный
-    номер`` for free.
+    field label(s), comma-joined), then ``Поле 1``, ``Поле 2``, ... --
+    the actual current value of each field named in ``Поле(я)``, in the
+    same order, formatted for display (see `_format_field_value`). A
+    record violating multiple rules gets one row per rule, not one
+    collapsed row, so every row is a single, actionable cause. Sorted by
+    site, then rule, then `Nomer` -- `export_cleaning_list` slices this
+    by site, so each site's sheet comes out already sorted by
+    ``Проблема`` then ``Регистрационный номер`` for free.
+
+    The number of ``Поле N`` columns is the largest number of fields any
+    single violation in this result implicates (e.g.
+    `outcome_mutual_exclusivity`'s 7 flags is normally the ceiling);
+    rows needing fewer are blank in the unused trailing columns. The
+    same columns are reused across every rule rather than each rule
+    getting its own named value columns, so a sheet sorted by
+    ``Проблема`` still reads as one consistent table.
 
     Joins `qc_result.flagged` back to `df` by (`Source`, `Nomer`) to
     recover the per-record field detail for `date_order` and
-    `dose_threshold_consistency` -- the same join key `cli.py` already
-    uses to rebuild `flagged_records.csv`. As with that existing join, a
-    genuine duplicate (`Source`, `Nomer`) pair (itself a
-    `duplicate_registration` violation) means those rows share one
-    lookup entry; this is a pre-existing limitation of keying by
-    (`Source`, `Nomer`) at all, not one introduced here.
+    `dose_threshold_consistency`, and the field values themselves for
+    every rule -- the same join key `cli.py` already uses to rebuild
+    `flagged_records.csv`. As with that existing join, a genuine
+    duplicate (`Source`, `Nomer`) pair (itself a `duplicate_registration`
+    violation) means those rows share one lookup entry; this is a
+    pre-existing limitation of keying by (`Source`, `Nomer`) at all, not
+    one introduced here.
     """
     flagged = qc_result.flagged
-    columns = ["Площадка", "Регистрационный номер", "Проблема", "Поле(я)"]
+    base_columns = ["Площадка", "Регистрационный номер", "Проблема", "Поле(я)"]
     if flagged.empty:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=base_columns)
 
     date_fields = _date_order_record_fields(df)
     dose_fields = _dose_threshold_record_fields(df)
@@ -217,6 +299,19 @@ def build_cleaning_list(df: pd.DataFrame, qc_result: qc.QCResult) -> pd.DataFram
             return dose_fields.get(key, RULE_FIELDS[rule])
         return RULE_FIELDS[rule]
 
+    row_lookup = _build_row_lookup(df)
+    field_lists: list[list[str]] = []
+    value_lists: list[list[object]] = []
+    for _, row in flagged.iterrows():
+        fields = fields_for(row)
+        field_lists.append(fields)
+        key = (row["Source"], row["Nomer"])
+        record = row_lookup.loc[key] if key in row_lookup.index else None
+        value_lists.append(_values_for(record, fields))
+
+    n_value_cols = max((len(values) for values in value_lists), default=0)
+    value_columns = [f"Поле {i}" for i in range(1, n_value_cols + 1)]
+
     # `Source` is categorical (`io.CATEGORY_COLUMNS`); cast to plain `str`
     # before mapping so the result is an ordinary string column rather than
     # carrying any categorical-dtype edge cases into the workbook.
@@ -226,13 +321,18 @@ def build_cleaning_list(df: pd.DataFrame, qc_result: qc.QCResult) -> pd.DataFram
             "Площадка": source_str.map(SITE_LABELS_RU).fillna(source_str),
             "Регистрационный номер": flagged["Nomer"],
             "Проблема": flagged["rule"].map(QC_RULE_LABELS_RU).fillna(flagged["rule"]),
-            "Поле(я)": flagged.apply(lambda row: _fields_ru(fields_for(row)), axis=1),
+            "Поле(я)": [_fields_ru(fields) for fields in field_lists],
             "_rule": flagged["rule"],
             "_source": flagged["Source"],
         }
     )
+    for col_idx, col_name in enumerate(value_columns):
+        out[col_name] = [
+            values[col_idx] if col_idx < len(values) else "" for values in value_lists
+        ]
+
     out = out.sort_values(["_source", "_rule", "Регистрационный номер"]).reset_index(drop=True)
-    return out[columns]
+    return out[base_columns + value_columns]
 
 
 def export_cleaning_list(
@@ -272,7 +372,13 @@ def export_cleaning_list(
     qc_result = qc_result if qc_result is not None else qc.run_qc(df)
     cleaning_df = build_cleaning_list(df, qc_result)
 
-    sheet_columns = ["Регистрационный номер", "Проблема", "Поле(я)"]
+    # `Поле 1`, `Поле 2`, ... are computed across the *whole* result (not
+    # per site) by `build_cleaning_list`, so every site's sheet has the
+    # same number of value columns even if that site happens not to have
+    # the specific violation that needed the most fields.
+    base_columns = {"Площадка", "Регистрационный номер", "Проблема", "Поле(я)"}
+    value_columns = [c for c in cleaning_df.columns if c not in base_columns]
+    sheet_columns = ["Регистрационный номер", "Проблема", "Поле(я)", *value_columns]
     written: dict[str, Path] = {}
 
     sites = sorted(df["Source"].dropna().unique().tolist())

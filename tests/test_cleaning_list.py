@@ -27,6 +27,7 @@ item 8:
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -226,17 +227,140 @@ def test_export_cleaning_list_writes_one_workbook_per_site(df, tmp_path):
 def test_export_cleaning_list_sheet_contents_match_build_cleaning_list(df, tmp_path):
     """Round-trip one site's workbook back through `openpyxl`/pandas and
     confirm it matches the corresponding slice of `build_cleaning_list`'s
-    output (same rows, same columns, same sort order)."""
+    output (same rows, same columns -- including the dynamic `Поле N`
+    value columns -- same sort order)."""
     qc_result = qc.run_qc(df)
     cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
 
     paths = cleaning_list.export_cleaning_list(df, tmp_path, qc_result=qc_result)
     vladimir_path = paths["Владимир"]
-
     sheet = pd.read_excel(vladimir_path, sheet_name="Список")
+
+    value_columns = [c for c in cleaning_df.columns if c.startswith("Поле ")]
+    base_columns = ["Регистрационный номер", "Проблема", "Поле(я)"]
     expected = cleaning_df.loc[
-        cleaning_df["Площадка"] == "Владимир",
-        ["Регистрационный номер", "Проблема", "Поле(я)"],
+        cleaning_df["Площадка"] == "Владимир", base_columns + value_columns
     ].reset_index(drop=True)
 
-    pd.testing.assert_frame_equal(sheet, expected, check_dtype=False)
+    assert list(sheet.columns) == base_columns + value_columns
+    pd.testing.assert_frame_equal(sheet[base_columns], expected[base_columns], check_dtype=False)
+
+    # `Поле N` cells mix dates, numbers, and Cyrillic text by design (see
+    # `build_cleaning_list`'s docstring). Excel has no concept of a missing
+    # string -- a blank cell round-trips through openpyxl as NaN, not ""
+    # -- and openpyxl returns a whole date as `datetime`, not the bare
+    # `date` `_format_field_value` produces in memory. Comparing each
+    # cell's displayed text sidesteps both without re-testing openpyxl's
+    # own type conventions; exact value correctness for these columns
+    # against the fixture is already covered directly (no Excel round
+    # trip involved) by the tests below.
+    def displayed(value: object) -> str:
+        if pd.isna(value) or value == "":
+            return ""
+        if hasattr(value, "date") and callable(value.date):
+            value = value.date()
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return str(value)
+
+    for col in value_columns:
+        actual_texts = [displayed(v) for v in sheet[col]]
+        expected_texts = [displayed(v) for v in expected[col]]
+        assert actual_texts == expected_texts, f"{col}: mismatch after export round-trip"
+
+
+# --- Поле N value columns (corrected-data feature) --------------------------
+
+
+def test_date_order_value_columns_hold_the_actual_reversed_dates(df):
+    """Nomer 4 (Vladimir) has `DateScreening` (2019-03-20) after
+    `DateCompleteExaminationTB` (2019-03-10) -- a reversed adjacent pair in
+    `qc.DATE_ORDER_SEQUENCE`. `Поле(я)` must name exactly those two fields
+    and `Поле 1`/`Поле 2` must hold their actual values (as plain dates,
+    not timestamps), in the same order."""
+    qc_result = qc.run_qc(df)
+    cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
+
+    row = cleaning_df[
+        (cleaning_df["Регистрационный номер"] == 4)
+        & (cleaning_df["Проблема"] == cleaning_list.QC_RULE_LABELS_RU["date_order"])
+    ]
+    assert len(row) == 1
+    row = row.iloc[0]
+
+    assert row["Поле(я)"] == "Дата скрининга, Дата завершения обследования на ТБ"
+    assert row["Поле 1"] == date(2019, 3, 20)
+    assert row["Поле 2"] == date(2019, 3, 10)
+
+
+def test_doses_taken_le_schema_value_columns_hold_the_actual_doses(df):
+    """Nomer 7 (Vladimir) has `DosesTaken`=200 > `SchemaDoses`=180.
+    `Поле 1`/`Поле 2` must hold those two raw counts unchanged."""
+    qc_result = qc.run_qc(df)
+    cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
+
+    row = cleaning_df[
+        (cleaning_df["Регистрационный номер"] == 7)
+        & (cleaning_df["Проблема"] == cleaning_list.QC_RULE_LABELS_RU["doses_taken_le_schema"])
+    ]
+    assert len(row) == 1
+    row = row.iloc[0]
+
+    assert row["Поле(я)"] == "Принято доз, Доз по схеме лечения"
+    assert row["Поле 1"] == 200
+    assert row["Поле 2"] == 180
+
+
+def test_dose_threshold_consistency_value_columns_render_booleans_in_russian(df):
+    """Nomer 13 (Vladimir) has `Take100pc`=True but `Take50pc`=False --
+    `Take100pc` implies `Take50pc`, so this is a `dose_threshold_
+    consistency` violation narrowed to just those two boolean fields.
+    Both must render as "Да"/"Нет", not as raw 0/1 or True/False."""
+    qc_result = qc.run_qc(df)
+    cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
+
+    row = cleaning_df[
+        (cleaning_df["Регистрационный номер"] == 13)
+        & (cleaning_df["Проблема"] == cleaning_list.QC_RULE_LABELS_RU["dose_threshold_consistency"])
+    ]
+    assert len(row) == 1
+    row = row.iloc[0]
+
+    assert row["Поле(я)"] == "Принято ≥50% доз, Принято 100% доз"
+    assert row["Поле 1"] == "Нет"
+    assert row["Поле 2"] == "Да"
+
+
+def test_value_column_count_equals_widest_violation_field_list(df):
+    """The dynamic `Поле N` column count must equal the largest number of
+    fields any single rule in this result implicates.
+    `outcome_mutual_exclusivity`'s static 7-field `RULE_FIELDS` entry
+    (Nomer 8/9 trigger it, per `test_qc.py`'s docstring) is wider than any
+    narrowed `date_order`/`dose_threshold_consistency` field list can get
+    in this fixture, so it should be the ceiling."""
+    qc_result = qc.run_qc(df)
+    cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
+
+    assert "outcome_mutual_exclusivity" in set(qc_result.flagged["rule"])
+    expected = len(cleaning_list.RULE_FIELDS["outcome_mutual_exclusivity"])
+
+    value_columns = [c for c in cleaning_df.columns if c.startswith("Поле ")]
+    assert value_columns == [f"Поле {i}" for i in range(1, expected + 1)]
+
+
+def test_short_violation_rows_blank_out_unused_trailing_value_columns(df):
+    """A 2-field violation (`doses_taken_le_schema`, Nomer 7) sharing a
+    result with a 7-field violation (`outcome_mutual_exclusivity`) must
+    have blank cells in `Поле 3` onward, not raise or misalign."""
+    qc_result = qc.run_qc(df)
+    cleaning_df = cleaning_list.build_cleaning_list(df, qc_result)
+
+    row = cleaning_df[
+        (cleaning_df["Регистрационный номер"] == 7)
+        & (cleaning_df["Проблема"] == cleaning_list.QC_RULE_LABELS_RU["doses_taken_le_schema"])
+    ].iloc[0]
+
+    trailing_columns = [c for c in cleaning_df.columns if c.startswith("Поле ")][2:]
+    assert len(trailing_columns) > 0  # otherwise this test isn't exercising anything
+    for col in trailing_columns:
+        assert row[col] == ""

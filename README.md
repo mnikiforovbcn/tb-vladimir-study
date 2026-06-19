@@ -43,7 +43,7 @@ Each run writes a single self-contained folder, `reports/<run_date>/`:
 |---|---|---|
 | `qc_report.md` | Technical QC appendix: rule violation rates by site, date-order reversal detail, missingness audit | Yes |
 | `flagged_records.csv` | Every QC-flagged row, full data, joined back from the raw export | **No -- local review only, see below** |
-| `data_cleaning/Владимир.xlsx`, `Ковров.xlsx`, `Муром.xlsx` | Phase 8: per-site, Russian-language correction list (registration number, problem, field(s)) for that site's data manager | **No -- local review only, see below** |
+| `data_cleaning/Владимир.xlsx`, `Ковров.xlsx`, `Муром.xlsx` | Phase 8: per-site, Russian-language correction list (registration number, problem, field(s), and -- via `Поле 1`, `Поле 2`, ... -- each field's actual current value) for that site's data manager | **No -- local review only, see below** |
 | `descriptive_report.html` / `.md` | Phase 6 report (English) | Yes |
 | `descriptive_report_ru.html` / `.md` | Russian translation, if `report/descriptive_report_ru.qmd` is present | Yes |
 
