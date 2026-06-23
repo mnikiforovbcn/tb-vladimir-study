@@ -27,6 +27,7 @@ report/*.md
 .vscode/
 .vs/
 .obsidian/
+.claude/
 
 # Test/coverage artifacts
 .pytest_cache/
